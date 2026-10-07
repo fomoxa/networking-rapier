@@ -1,6 +1,6 @@
 # Thi công backend Rapier (8b)
 
-Repo này chứa backend physics Rapier của `com.fomoxa.networking`: package `com.fomoxa.networking.rapier`, crate FFI `fomoxa-rapier`, binary native, test và phép kiểm hai phía. Thiết kế nằm ở repo `unity`: `design/principles.md` P27 (mục "Server console và 8b"), `design/open-questions.md` Q163 – Q166. Kế hoạch và hợp đồng của các bước con nằm ở `implementation/08-prediction-physics.md` của repo `unity` (mục 8b). Tệp trong thư mục này là bản thi công của các bước con làm ở repo này.
+Thư mục này là bản thi công của các bước con 8b làm ở repo `networking-rapier`. Thiết kế nằm ở repo `unity`, trong `design/principles.md` P27 (mục "Server console và 8b") và `design/open-questions.md` Q163 – Q166. Kế hoạch và hợp đồng của từng bước con nằm ở mục 8b của `implementation/08-prediction-physics.md` trong repo `unity`.
 
 Thứ tự thẩm quyền như repo `unity`: `design/` của repo `unity` → kế hoạch 8b ở `implementation/` của repo `unity` → tệp trong thư mục này → code.
 
@@ -35,7 +35,7 @@ implementation/                  thư mục này
 
 ## Core
 
-Test `dotnet`, project Unity và server kiểm hai phía lấy Core từ thư mục `../unity/com.fomoxa.networking` cạnh repo này (repo `unity` clone cùng cấp). Cách CI lấy Core (bản chép có tệp `SOURCE`, submodule ghim commit, hay tag) chưa định; khi định xong, các đường dẫn `../../unity`, `../../../unity` trong `tests/*.csproj`, `checks/two-sided/*.csproj`, `test-project/Packages/manifest.json` và `Tools/*.sh` đổi theo. Kế hoạch 8b của repo `unity` ghi submodule ghim commit; P12 của design ghi CI lấy Core theo tag đã ghim.
+Test `dotnet`, project Unity và server kiểm hai phía lấy Core từ `../unity/com.fomoxa.networking`, tức repo `unity` clone cùng cấp với repo này. Cách CI lấy Core chưa định; các phương án là bản chép có tệp `SOURCE`, submodule ghim commit, hoặc tag. Kế hoạch 8b của repo `unity` ghi submodule ghim commit, còn P12 ghi CI lấy Core theo tag đã ghim. Khi chọn xong, các đường dẫn `../../unity`, `../../../unity` trong `tests/*.csproj`, `checks/two-sided/*.csproj`, `test-project/Packages/manifest.json` và `Tools/*.sh` đổi theo.
 
 ## Lệnh
 
@@ -49,4 +49,4 @@ Test `dotnet`, project Unity và server kiểm hai phía lấy Core từ thư m�
 
 Môi trường WSL cần `LANG=C.UTF-8 LC_ALL=C.UTF-8 DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1` cho `dotnet`. Build Windows dùng `cargo.exe` của Windows; test `dotnet` trên Windows chạy bằng `dotnet.exe` với `TargetFramework` đổi sang `net9.0` trong bản chép (máy chỉ có SDK 9).
 
-Binary native được commit, build bằng tay theo luật của fomoxac; không có CI build hay phát hành binary (Q163 (2) C). Đổi crate thì build lại cả hai nền tảng, chạy lại test hai nền tảng và phép kiểm hai phía, rồi chạy lại `Tools/third-party-notices.py` nếu cây phụ thuộc đổi.
+Binary native được build bằng tay rồi commit, theo luật của fomoxac; không có CI build hay phát hành binary (Q163 (2) C). Sau khi đổi crate, build lại cả hai nền tảng, chạy lại test trên hai nền tảng và phép kiểm hai phía. Nếu cây phụ thuộc đổi, chạy lại `Tools/third-party-notices.py`.

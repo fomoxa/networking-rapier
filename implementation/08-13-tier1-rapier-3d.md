@@ -1,6 +1,6 @@
 # 08.13 — Tầng 1: crate Rapier 3D, `RapierWorld`
 
-> Bước con 08.13 (kế hoạch: `implementation/08-prediction-physics.md` của repo `unity`, mục 8b). Listing là mã hiện tại của repo, gồm cả phần 2D (08.14) trong các tệp dùng chung và phần tập chạm (08.15) của `world3d.rs`, `RapierWorld`. Test: `dotnet test` 33/33 trên Linux (.NET 8) và Windows (.NET 9).
+> Bước con 08.13; kế hoạch ở mục 8b của `implementation/08-prediction-physics.md` trong repo `unity`. Listing là mã hiện tại của repo, nên có cả phần 2D (08.14) trong các tệp dùng chung và phần tập chạm (08.15) của `world3d.rs`, `RapierWorld`. Test: `dotnet test` 33/33 trên Linux (.NET 8) và Windows (.NET 9).
 
 | | Việc | Trạng thái |
 |---|---|:---:|
@@ -19,35 +19,36 @@
 
 ### Crate
 
-- Một crate cho 3D và 2D (`rapier3d`, `rapier2d` cùng `=0.36.0`, feature `enhanced-determinism`, `serde-serialize`), `crate-type` `cdylib` cho Unity và server console, `rlib` cho kiểm thử Rust. Bản release bật `lto`, `codegen-units = 1`, `panic = "abort"` (lỗi trong Rust dừng tiến trình, không tháo ngăn xếp qua ranh giới C) và `strip = true` (bỏ symbol: thư viện Linux từ 5.9 MB còn 5.2 MB, phần còn lại là mã máy; bản Windows để symbol ở tệp PDB riêng nên kích thước không đổi).
-- Thế giới (`World`) là con trỏ hộp (`Box`) trả cho C#; C# giữ `IntPtr` và gọi `fr_world_destroy` khi `Dispose`. Mọi hàm nhận con trỏ `null` thì trả giá trị rỗng (`false`, `0`), không đọc bộ nhớ.
-- Body có id `u32` do crate cấp, tăng dần từ 1, không dùng lại (P27: `BodyHandle` là định danh ổn định do crate cấp, ánh xạ sang handle Rapier). Bảng `BTreeMap<u32, BodyEntry>` giữ handle Rapier, công thức dựng (`BodyRecipe`: loại, khối lượng, danh sách collider) và cờ chạy lại được. `user_data` của body là id; của collider là id body ở 32 bit thấp, chỉ số collider trong body ở 32 bit kế (collider tĩnh có id body 0, chỉ số theo thứ tự thêm).
-- Collider: `FrCollider` `repr(C)` mang shape, tư thế cục bộ, kích thước, con trỏ đỉnh và chỉ số tam giác, ma sát, độ nảy, hai cách kết hợp, layer, cờ trigger. Mã shape và mã cách kết hợp trùng thứ tự `ShapeKind`, `CombineRule` của Core (C# truyền thẳng giá trị enum). `CombineRule.Mean` là `GeometricMean` của Rapier, không cần hook. Trigger là sensor. Layer thành `InteractionGroups` (thành viên `1 << layer`, lọc theo mặt nạ của layer, chế độ `And`). Mọi collider bật `ActiveCollisionTypes` trừ `FIXED_FIXED` (08.15). Bao lồi suy biến hoặc lưới hỏng thì việc dựng trả `None`, hàm FFI trả lỗi.
-- Khối lượng: body động có `mass > 0` thì tính khối lượng theo mật độ 1, rồi đặt lại mật độ mọi collider bằng `mass / khối lượng tính được`, để tổng đúng `mass` mà tâm và quán tính vẫn theo hình.
-- `Step(seconds)` đặt `dt` rồi gọi `PhysicsWorld::step`, sau đó xóa lực của mọi body: lực kéo dài một bước (P27).
-- Truy vấn (`raycast`, `overlap`) duyệt mọi collider ở tư thế hiện tại của body cha, không dùng BVH của pha rộng: BVH chỉ cập nhật khi bước, nên body vừa tạo hoặc vừa đặt tư thế sẽ bị bỏ sót. Tia trúng collider tĩnh trả body 0 (handle không hợp lệ); `overlap` chỉ trả body, theo thứ tự id.
+- Một crate phục vụ cả 3D lẫn 2D. `rapier3d` và `rapier2d` cùng ghim `=0.36.0` với feature `enhanced-determinism` và `serde-serialize`. `crate-type` gồm `cdylib` cho Unity và server console, `rlib` cho kiểm thử Rust.
+- Bản release bật `lto`, `codegen-units = 1` và `panic = "abort"`, nên lỗi trong Rust dừng tiến trình thay vì tháo ngăn xếp qua ranh giới C. `strip = true` bỏ symbol: thư viện Linux giảm từ 5.9 MB còn 5.2 MB, phần còn lại là mã máy. Bản Windows để symbol ở tệp PDB riêng nên kích thước không đổi.
+- Thế giới (`World`) là một `Box` mà crate trả về cho C# dưới dạng con trỏ. C# giữ `IntPtr` và gọi `fr_world_destroy` khi `Dispose`. Hàm nào nhận con trỏ `null` thì trả giá trị rỗng (`false`, `0`) mà không đọc bộ nhớ.
+- Crate cấp id `u32` cho body, tăng dần từ 1 và không dùng lại; theo P27, `BodyHandle` là định danh ổn định do crate cấp và ánh xạ sang handle Rapier. Bảng `BTreeMap<u32, BodyEntry>` giữ handle Rapier, công thức dựng (`BodyRecipe`: loại, khối lượng, danh sách collider) và cờ chạy lại được. `user_data` của body là id. `user_data` của collider chứa id body ở 32 bit thấp và chỉ số collider trong body ở 32 bit kế tiếp; collider tĩnh có id body 0 và chỉ số theo thứ tự thêm.
+- `FrCollider` (`repr(C)`) mang shape, tư thế cục bộ, kích thước, con trỏ đỉnh và chỉ số tam giác, ma sát, độ nảy, hai cách kết hợp, layer và cờ trigger. Mã shape và mã cách kết hợp theo đúng thứ tự `ShapeKind`, `CombineRule` của Core, nên C# truyền thẳng giá trị enum. `CombineRule.Mean` ứng với `GeometricMean` của Rapier, không cần hook. Trigger thành sensor. Layer thành `InteractionGroups` với thành viên `1 << layer`, bộ lọc là mặt nạ của layer, chế độ `And`. Mọi collider bật `ActiveCollisionTypes` trừ `FIXED_FIXED` (08.15). Khi bao lồi suy biến hoặc lưới hỏng, việc dựng trả `None` và hàm FFI báo lỗi.
+- Với body động có `mass > 0`, crate tính khối lượng theo mật độ 1, rồi đặt mật độ mọi collider bằng `mass / khối lượng tính được`. Tổng khối lượng vì thế đúng bằng `mass`, còn tâm và quán tính vẫn theo hình.
+- `Step(seconds)` đặt `dt`, gọi `PhysicsWorld::step`, rồi xóa lực của mọi body, nên một lực chỉ tác dụng trong một bước (P27).
+- `raycast` và `overlap` duyệt mọi collider ở tư thế hiện tại của body cha thay vì dùng BVH của pha rộng. BVH chỉ cập nhật khi bước, nên dùng nó sẽ bỏ sót body vừa tạo hoặc vừa đặt tư thế. Tia trúng collider tĩnh trả body 0 (handle không hợp lệ); `overlap` chỉ trả body, theo thứ tự id.
 
 ### Chụp và khôi phục (Q163 (7) A)
 
-- `fr_world_snapshot` mã hóa `bincode` của `PhysicsWorld` (mọi tập, gồm pha hẹp và cặp tiếp xúc) cùng bảng `(id, chỉ số, thế hệ)` của body và số định dạng; `fr_world_snapshot_copy` chép ra mảng của C#. Bản chụp của bản build khác (định dạng khác, giải mã lỗi) bị từ chối.
-- `fr_world_load`: đọc trạng thái và loại hiện tại của mọi body; thay cả thế giới bằng bản chụp; xóa body có trong bản chụp nhưng đã xóa sau lúc chụp; body tạo sau lúc chụp được tạo lại từ công thức với trạng thái và loại đọc trước khi khôi phục, theo thứ tự id; body không chạy lại được (body đại diện, `fr_body_set_rewindable`) giữ trạng thái và loại hiện tại. Collider tĩnh nằm trong bản chụp.
-- Body tạo lại mất tiếp xúc, nên tick đầu sau `Load` của body đó chỉ gần đúng (P27).
+- `fr_world_snapshot` mã hóa `PhysicsWorld` bằng `bincode`, gồm mọi tập, pha hẹp và cặp tiếp xúc, kèm bảng `(id, chỉ số, thế hệ)` của body và số định dạng. `fr_world_snapshot_copy` chép kết quả ra mảng của C#. Bản chụp có định dạng khác hoặc giải mã lỗi bị từ chối.
+- `fr_world_load` đọc trạng thái và loại hiện tại của mọi body, rồi thay cả thế giới bằng bản chụp. Body có trong bản chụp nhưng đã bị xóa sau lúc chụp thì bị xóa lại. Body tạo sau lúc chụp được dựng lại từ công thức, theo thứ tự id, với trạng thái và loại đã đọc trước khi khôi phục. Body không chạy lại được (body đại diện, đặt bằng `fr_body_set_rewindable`) giữ trạng thái và loại hiện tại. Collider tĩnh nằm trong bản chụp.
+- Body dựng lại không có tiếp xúc, nên tick đầu tiên sau `Load` của body đó chỉ gần đúng (P27).
 
 ### Băm trạng thái
 
-`fr_world_hash`: FNV-1a 64 bit trên id, loại, vị trí, xoay, vận tốc, vận tốc góc của mọi body theo thứ tự id; mỗi `f32` được chuẩn hóa (`-0` thành `0`, mọi NaN thành một NaN) rồi băm theo byte little-endian. Băm dùng cho test tất định và phép kiểm hai phía, không dùng lúc chạy game.
+`fr_world_hash` tính FNV-1a 64 bit trên id, loại, vị trí, xoay, vận tốc và vận tốc góc của mọi body theo thứ tự id. Mỗi `f32` được chuẩn hóa trước (`-0` thành `0`, mọi NaN thành một NaN) rồi băm theo byte little-endian. Băm chỉ dùng cho test tất định và phép kiểm hai phía, không dùng lúc chạy game.
 
 ### C#
 
-- `RapierNative`: `DllImport("fomoxa_rapier")` không đuôi; Unity chọn tệp theo `.meta` của nền tảng, server console tìm tệp cạnh tệp chạy. `bool` trả về được đánh dấu `MarshalAs(UnmanagedType.U1)`.
-- `RapierColliders`: đổi `ColliderDesc` sang `FrCollider`, ghim mảng đỉnh và tam giác bằng `GCHandle` trong suốt lời gọi.
-- `RapierWorld : IPhysicsWorld, IDisposable`: tạo body ném `ArgumentException` khi crate từ chối; đọc, ghi body không có trong thế giới ném `ArgumentException`; `Save`, `Load` với `PhysicsSnapshot` riêng của backend (mảng byte tái dùng); thêm `StateHash`, `SetLayerCollisions` (32 mặt nạ), `AddStatic`, `SetKind`, `IsDisposed`.
-- `IRapierBodies` (`internal`): phần chung của thế giới 3D và 2D mà `RapierScenes` dùng cho body đại diện.
-- `RapierPackage.CheckCore`: so `NetworkRuntime.Version` với phiên bản Core mà package được build cùng (P12); `RapierScenes` gọi khi tạo.
+- `RapierNative` khai báo `DllImport("fomoxa_rapier")` không có đuôi tệp. Unity chọn tệp theo `.meta` của từng nền tảng, server console tìm tệp cạnh tệp chạy. Giá trị `bool` trả về có `MarshalAs(UnmanagedType.U1)`.
+- `RapierColliders` đổi `ColliderDesc` sang `FrCollider` và ghim mảng đỉnh, tam giác bằng `GCHandle` trong suốt lời gọi.
+- `RapierWorld : IPhysicsWorld, IDisposable` ném `ArgumentException` khi crate từ chối tạo body, hoặc khi đọc, ghi một body không có trong thế giới. `Save`, `Load` dùng `PhysicsSnapshot` riêng của backend, giữ một mảng byte tái dùng. Lớp có thêm `StateHash`, `SetLayerCollisions` (32 mặt nạ), `AddStatic`, `SetKind` và `IsDisposed`.
+- `IRapierBodies` (`internal`) là phần chung của thế giới 3D và 2D mà `RapierScenes` dùng cho body đại diện.
+- `RapierPackage.CheckCore` so `NetworkRuntime.Version` với phiên bản Core mà package được build cùng (P12). `RapierScenes` gọi hàm này khi được tạo.
 
 ### Đo chi phí chụp
 
-Thế giới có lưới tam giác 20 000 tam giác và 100 cầu sau 60 bước, 50 lần mỗi thao tác:
+Thế giới đo có một lưới 20 000 tam giác và 100 quả cầu, đã chạy 60 bước; mỗi thao tác lặp 50 lần:
 
 | Nền tảng | `Save` | `Load` | `Step` |
 |---|---:|---:|---:|
@@ -58,11 +59,11 @@ Với lịch sử 64 tick, một lần chạy lại dài cỡ một RTT gồm m�
 
 ### Tất định giữa nền tảng
 
-`APileReachesTheSameStateOnEveryPlatform` thả 20 hộp xoay lên sàn, chạy 300 bước và so với băm cố định `0xF1860E86303F3AED`; cùng băm trên Linux (glibc, .NET 8) và Windows (MSVC, .NET 9). 08.16 kiểm thêm giữa server console và client Unity (Mono).
+`APileReachesTheSameStateOnEveryPlatform` thả 20 hộp xoay lên sàn, chạy 300 bước rồi so với băm cố định `0xF1860E86303F3AED`. Linux (glibc, .NET 8) và Windows (MSVC, .NET 9) cho cùng băm. 08.16 kiểm thêm giữa server console và client Unity chạy Mono.
 
 ### Design
 
-Bản đầu của P27 và Q163 (2) ghi crate lấy `afjk/rapier-unity` làm mẫu (bảng thế giới theo `world_id`, handle `index` + `generation`, ghi chú giấy phép MIT cho mã chép). Crate tự viết, không chép mã: thế giới là con trỏ do `RapierWorld`, `RapierWorld2D` giữ riêng và đặt về 0 khi hủy; body là id `u32` không dùng lại. Design đã sửa theo crate (P27 mục "Server console và 8b", ghi đè có lý do ở Q163 (2)).
+Bản đầu của P27 và Q163 (2) ghi crate lấy `afjk/rapier-unity` làm mẫu, với bảng thế giới theo `world_id`, handle `index` + `generation` và ghi chú giấy phép MIT cho mã chép. Crate thực tế tự viết, không chép mã: thế giới là con trỏ do `RapierWorld`, `RapierWorld2D` giữ riêng và đặt về 0 khi hủy, còn body là id `u32` không dùng lại. Design đã sửa theo crate (P27 mục "Server console và 8b"; lý do ghi đè ở Q163 (2)).
 
 ---
 

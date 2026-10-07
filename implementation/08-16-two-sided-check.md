@@ -1,6 +1,6 @@
 # 08.16 — Kiểm hai phía: server console Rapier với client Unity Rapier
 
-> Bước con 08.16 (kế hoạch: `implementation/08-prediction-physics.md` của repo `unity`, "Kế hoạch đề xuất của 08.16: kiểm hai phía"; kết quả cũng ghi ở mục 08.16 của tệp đó). Lần đầu server console chạy với client Unity (10.9 chỉ kiểm server console với client console).
+> Bước con 08.16; kế hoạch ở mục "Kế hoạch đề xuất của 08.16: kiểm hai phía" của `implementation/08-prediction-physics.md` trong repo `unity`, và kết quả cũng ghi ở mục 08.16 của tệp đó. Đây là lần đầu server console chạy với client Unity; 10.9 mới kiểm server console với client console.
 
 | | Việc | Trạng thái |
 |---|---|:---:|
@@ -18,33 +18,33 @@
 
 ### Kịch bản
 
-- Hộp kín không trọng lực: sàn, trần, bốn tường (hộp) và một kim tự tháp lưới tam giác ở giữa. Server sinh tệp scene bằng code (`TwoSidedScenario.Arena`), ghi ra đĩa; client đọc cùng byte qua `RapierPhysics.SceneFileOf`. Server nạp cùng hình học vào thế giới `sceneId` 0; client nạp vào thế giới của scene đang mở.
-- Khi client kết nối, server spawn ba bóng (cầu bán kính 0.5, khối lượng 1, vật liệu ma sát 0.5, độ nảy 0.5, kết hợp `Average`) do client sở hữu, theo một thứ tự cố định. Client Unity dựng bóng từ prefab có `SphereCollider`, `PhysicsMaterial` và `Rigidbody` tương ứng; bộ chuyển của 08.10 cho đúng mô tả của server.
-- Mỗi tick, `Apply` cộng một xung lực là hàm của tick và chỉ số bóng (thứ tự spawn): trộn bit số nguyên rồi chia cho 1024, không dùng hàm lượng giác, để CoreCLR và Mono tính cùng bit. Nội dung input không quyết định xung lực, nên input đến trễ (server lặp input cũ) không làm lệch.
-- Reconcile mỗi tick (`ReconcileInterval` 1) với 13 số thực của body (vị trí, xoay, vận tốc, vận tốc góc), so khớp từng bit; mỗi lần lệch được đếm.
-- Mỗi phía ghi `tick → StateHash` của thế giới trong `Capture` (sau bước của tick đó; client ghi đè khi chạy lại). Server dừng khi client ngắt kết nối; client chạy 25 giây theo đồng hồ thật, `Thread.Sleep(1)` giữa các khung.
+- Bóng chạy trong một hộp kín không trọng lực gồm sàn, trần, bốn tường (hộp) và một kim tự tháp lưới tam giác ở giữa. Server sinh tệp scene bằng code (`TwoSidedScenario.Arena`) và ghi ra đĩa; client đọc đúng các byte đó qua `RapierPhysics.SceneFileOf`. Server nạp hình học vào thế giới `sceneId` 0, client nạp vào thế giới của scene đang mở.
+- Khi client kết nối, server spawn ba bóng do client sở hữu, theo một thứ tự cố định. Mỗi bóng là một cầu bán kính 0.5, khối lượng 1, ma sát 0.5, độ nảy 0.5, cách kết hợp `Average`. Client Unity dựng bóng từ prefab có `SphereCollider`, `PhysicsMaterial` và `Rigidbody` tương ứng, và bộ chuyển của 08.10 cho ra đúng mô tả mà server dùng.
+- Mỗi tick, `Apply` cộng vào bóng một xung lực tính từ tick và chỉ số bóng (thứ tự spawn). Xung lực được tính bằng phép trộn bit số nguyên rồi chia cho 1024, không dùng hàm lượng giác, để CoreCLR và Mono cho cùng bit. Nội dung input không ảnh hưởng xung lực, nên input đến trễ, khi server phải lặp input cũ, không gây lệch.
+- Reconcile chạy mỗi tick (`ReconcileInterval` 1) trên 13 số thực của body: vị trí, xoay, vận tốc, vận tốc góc. Hai phía phải khớp từng bit, và mỗi lần lệch được đếm.
+- Mỗi phía ghi `tick → StateHash` của thế giới trong `Capture`, tức sau bước của tick đó; client ghi đè khi chạy lại. Server dừng khi client ngắt kết nối. Client chạy 25 giây theo đồng hồ thật, `Thread.Sleep(1)` giữa các khung.
 
 ### Tiêu chí và kết quả
 
-Đạt khi mọi tick có ở cả hai bản ghi cho cùng băm, có ít nhất 1000 tick chung và reconcile lệch bằng 0. Client: Unity 6000.5.7f1 Editor, Mono, Windows, batchmode.
+Phép kiểm đạt khi mọi tick có ở cả hai bản ghi đều cho cùng băm, số tick chung ít nhất 1000, và không có reconcile nào lệch. Client chạy trên Unity 6000.5.7f1 Editor (Mono, Windows, batchmode).
 
 | Server | Tick chung | Băm lệch | Reconcile lệch | Kết quả |
 |---|---:|---:|---:|:---:|
 | Linux, .NET 8.0.30 | 1484 | 0 | 0 | PASS |
 | Windows, .NET 9.0.20 | 1483 | 0 | 0 | PASS |
 
-Server đếm tiếp xúc qua `Touching` của từng bóng; một lần chạy: bóng chạm tường ở 110 tick, chạm lưới ở 21 tick, 6 lần chạm bóng khác (đếm từ cả hai bóng).
+Server đếm tiếp xúc qua `Touching` của từng bóng. Trong một lần chạy, bóng chạm tường ở 110 tick, chạm lưới ở 21 tick, và có 6 lần bóng chạm bóng (đếm từ cả hai phía của mỗi cặp).
 
 ### Phát hiện
 
-- Client chỉ dự đoán sau trạng thái reconcile đầu tiên: trước đó nó gửi input mà không áp dụng; khi reconcile, nó khôi phục trạng thái server ở tick t rồi chạy lại từ t + 1. Tick áp dụng đầu ở client vì thế luôn sau server. Bản thử đầu bắt đầu xung lực từ "tick áp dụng đầu + 60" và lệch đúng một tick ở tick bắt đầu (ba reconcile lệch); kịch bản nay không phụ thuộc tick áp dụng đầu.
-- `RapierPhysics` gắn body theo thứ tự duyệt `HashSet`; nay theo `ObjectId` (08.15).
-- Unity chạy cả test `[Explicit]` khi lọc theo `-assemblyNames`: test client tự bỏ qua khi thiếu biến môi trường của script.
+- Client chỉ bắt đầu dự đoán sau trạng thái reconcile đầu tiên. Trước đó nó gửi input mà không áp dụng; khi reconcile, nó khôi phục trạng thái của server ở tick t rồi chạy lại từ t + 1. Vì vậy tick áp dụng đầu tiên ở client luôn sau server. Bản thử đầu bắt đầu xung lực từ "tick áp dụng đầu + 60" và lệch đúng một tick ở tick bắt đầu, sinh ba reconcile lệch. Kịch bản hiện tại không phụ thuộc tick áp dụng đầu.
+- `RapierPhysics` từng gắn body theo thứ tự duyệt `HashSet`; nay gắn theo `ObjectId` (08.15).
+- Unity chạy cả test `[Explicit]` khi lọc theo `-assemblyNames`, nên test client tự bỏ qua khi thiếu biến môi trường do script đặt.
 
 ### Khác kế hoạch
 
-- Không có `StartTick` đồng bộ qua state: xung lực áp dụng từ tick đầu, trạng thái trước khi client dự đoán đến từ reconcile của server (xem Phát hiện). State đồng bộ cần model có kênh tin cậy trong registry, không cần cho phép kiểm.
-- Script dùng địa chỉ IP của WSL cho server Linux, `127.0.0.1` cho server Windows; truyền tham số cho Unity qua `WSLENV`.
+- Không có `StartTick` đồng bộ qua state. Xung lực áp dụng từ tick đầu, và trạng thái trước khi client dự đoán đến từ reconcile của server (xem Phát hiện). Dùng state đồng bộ sẽ cần một model có kênh tin cậy trong registry, điều phép kiểm không cần.
+- Script dùng địa chỉ IP của WSL khi server chạy trên Linux và `127.0.0.1` khi server chạy trên Windows. Tham số cho Unity truyền qua `WSLENV`.
 
 ---
 

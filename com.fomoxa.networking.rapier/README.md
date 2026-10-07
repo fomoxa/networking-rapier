@@ -1,6 +1,6 @@
 # Fomoxa Networking Rapier
 
-`com.fomoxa.networking.rapier` is a physics backend for [`com.fomoxa.networking`](https://github.com/fomoxa/com.fomoxa.networking) built on [Rapier](https://rapier.rs). It replaces Unity's PhysX for network objects with Rapier worlds that behave the same on every supported platform. A Unity client and a server that runs without Unity, on Windows or Linux, compute the same physics state from the same inputs.
+`com.fomoxa.networking.rapier` is a physics backend for [`com.fomoxa.networking`](https://github.com/fomoxa/com.fomoxa.networking) built on [Rapier](https://rapier.rs). Network objects are simulated in Rapier worlds instead of Unity's PhysX. Given the same inputs, a Unity client and a server that runs without Unity compute the same physics state, on Windows or Linux.
 
 | | |
 |---|---|
@@ -13,11 +13,9 @@
 
 ## Why Rapier
 
-The Rigidbody backend of `com.fomoxa.networking` drives Unity's PhysX. PhysX cannot restore its contact state, so a replayed tick only approximates the original one, and a server without Unity cannot run it at all. This package keeps one Rapier world per network scene and per dimension, and gives it:
+The Rigidbody backend of `com.fomoxa.networking` drives Unity's PhysX. PhysX cannot restore its contact state, so a replayed tick only approximates the original one, and a server without Unity cannot run PhysX at all.
 
-- Exact rollback. A snapshot holds the whole world, contacts included, so a replay after `Load` reproduces the original ticks bit for bit.
-- Cross-platform determinism. Rapier is pinned to one version and built with `enhanced-determinism`; the same steps give the same state on Windows and Linux, under Mono and under .NET.
-- One simulation on both sides. A console server and a Unity client build the same world from the same scene file and the same body descriptions.
+This package keeps one Rapier world per network scene and per dimension. A snapshot holds the whole world, contacts included, so a replay after `Load` reproduces the original ticks bit for bit. Rapier is pinned to one version and built with `enhanced-determinism`, and the same steps give the same state on Windows and Linux, under Mono and under .NET. A console server and a Unity client build their worlds from the same scene file and the same body descriptions, so both run one simulation.
 
 ## Installation
 
@@ -28,7 +26,7 @@ https://github.com/fomoxa/com.fomoxa.networking.git
 https://github.com/fomoxa/networking-rapier.git?path=com.fomoxa.networking.rapier
 ```
 
-Unity package manifests cannot depend on git packages, so this package does not declare `com.fomoxa.networking` as a dependency. It checks the Core version when it creates its worlds instead, and throws if the project has a different one.
+A Unity package cannot declare a dependency on a git package, so `com.fomoxa.networking` is not listed in this package's dependencies. The package checks the Core version when it creates its worlds and throws if the project has a different one.
 
 ## Using it in Unity
 
@@ -36,7 +34,7 @@ Unity package manifests cannot depend on git packages, so this package does not 
 2. Do the same for the server and every client. A connection needs the same physics backend on both sides; a client whose backend differs from the server's is stopped with `StopReason.PhysicsBackendMismatch`.
 3. Export the network scene files. The Fomoxa Editor step writes them when you save a network scene, and on Tools > Fomoxa > Export Network Scene Files. Rapier reads the static geometry of a scene from its file, so a scene without a file has no static colliders in Rapier and logs a warning.
 
-`NetworkObject.Body` and `NetworkObject.Body2D` then return bodies in the Rapier world of the object's scene. They are built from the object's colliders and `Rigidbody`/`Rigidbody2D`. Rapier writes the pose of each body back to the object's `Transform` after every tick. The `Rigidbody` itself is switched to kinematic and only keeps local, cosmetic PhysX work.
+`NetworkObject.Body` and `NetworkObject.Body2D` then return bodies in the Rapier world of the object's scene, built from the object's colliders and its `Rigidbody` or `Rigidbody2D`. After every tick Rapier writes each body's pose back to the object's `Transform`. The `Rigidbody` is switched to kinematic, so PhysX only does local cosmetic work.
 
 Supported colliders:
 
@@ -50,7 +48,7 @@ Meshes used by a body that is created at runtime must have Read/Write enabled. F
 
 ## Contact events
 
-`NetworkTrigger`, `NetworkCollision`, `NetworkTrigger2D` and `NetworkCollision2D` work unchanged. `RapierPhysics` takes over the components on objects it simulates, and those on the static objects of the scenes it loads. They then report the contact and intersection pairs of the Rapier world instead of PhysX callbacks. Rollback restores these pairs together with the bodies.
+`NetworkTrigger`, `NetworkCollision`, `NetworkTrigger2D` and `NetworkCollision2D` keep their API. `RapierPhysics` takes over these components on the objects it simulates and on the static objects of the scenes it loads, and they then report the contact and intersection pairs of the Rapier world instead of PhysX callbacks. Rollback restores the pairs together with the bodies.
 
 Differences from the Rigidbody backend:
 
@@ -72,7 +70,7 @@ The console backend loads each scene file into its own Rapier world and creates 
 
 ## Keeping the simulation deterministic
 
-The engine gives the same result for the same world and the same operations. Your game code has to keep the operations the same:
+Rapier gives the same result for the same world and the same operations. Game code has to keep the operations the same:
 
 - Apply forces, impulses and state changes in prediction callbacks, in a fixed order, from inputs and the tick number.
 - Avoid `Mathf.Sin`, `MathF.Cos` and other library math whose last bit can differ between runtimes in values that reach the simulation. Use tables, integer arithmetic or values from the input.

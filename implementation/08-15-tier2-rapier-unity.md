@@ -1,6 +1,6 @@
 # 08.15 — Tầng 2: `RapierPhysics`, nguồn tập chạm ở Unity
 
-> Bước con 08.15 (kế hoạch và hợp đồng: `implementation/08-prediction-physics.md` của repo `unity`, mục 8b), phần Unity của package. Điểm cắm ở `Fomoxa.Unity` (`IContactQuery`, `Attach`, `Detach`, `TryDescribe*` có `sources`, `StaticColliders*`) làm ở repo `unity`: `implementation/08-15-tier2-contact-attach.md` của repo đó. Test: Unity EditMode 7/7 (Unity 6000.5.7f1, Windows), cùng một test bỏ qua là phép kiểm hai phía của 08.16.
+> Phần Unity của package trong bước con 08.15; kế hoạch và hợp đồng ở mục 8b của `implementation/08-prediction-physics.md` trong repo `unity`. Điểm cắm ở `Fomoxa.Unity` (`IContactQuery`, `Attach`, `Detach`, `TryDescribe*` có `sources`, `StaticColliders*`) làm ở repo `unity` và mô tả trong `implementation/08-15-tier2-contact-attach.md` của repo đó. Test: Unity EditMode 7/7 trên Unity 6000.5.7f1 (Windows); một test nữa bị bỏ qua vì đó là phép kiểm hai phía của 08.16.
 
 | | Việc | Trạng thái |
 |---|---|:---:|
@@ -19,29 +19,29 @@
 
 ### `RapierPhysics`
 
-- Đặt trên GameObject của `NetworkManager` và gán vào trường `physics` của manager. `Backend` là `Rapier`; trường `gravity` (mặc định (0, -9.81, 0)).
-- `Begin`: lấy `NetworkManager` trên cùng GameObject (không có thì ném), tạo `RapierScenes` và `RapierContacts`; `Begin` lần hai ném. `Release`: trả `Rigidbody` về trạng thái cũ, gỡ mọi component chạm đã nhận, hủy mọi thế giới.
-- Mỗi lần Core hỏi thế giới cần bước (`WorldsToStep`):
-  1. Đồng bộ scene: với mỗi scene Unity đã nạp có `SceneId` (từ danh sách scene mạng của manager), nạp tệp scene một lần (`SceneRegistry.TryGetSceneFile`, giải mã bằng registry của manager); scene không có tệp hoặc tệp hỏng thì ghi cảnh báo, lỗi một lần và chạy không có hình học tĩnh. Scene đã gỡ thì gỡ thế giới của nó.
-  2. Đồng bộ body: object trong `Spawned` của server và client của manager được gắn body theo thứ tự `ObjectId`; object đã despawn hoặc bị hủy được gỡ.
-  3. Nhận component chạm của các object có body.
-  4. Trả các thế giới, mỗi thế giới bọc trong một lớp ghi tư thế body về `Transform` sau `Step` và sau `Load` (bỏ body đại diện).
-- Gắn body: `BodyDescriptions.TryDescribe`, `TryDescribe2D` trên GameObject của object (có `sources`); thế giới theo scene của object. `Rigidbody` thành kinematic, `Rigidbody2D` thành `Kinematic`, trạng thái cũ được nhớ để trả lại. Collider không hỗ trợ: ghi ngoại lệ, object chạy không có body.
-- `BodyOf`, `Body2DOf` gắn body ngay nếu chưa có. `WorldsOf(scene)` trả thế giới của scene. `PlaceProxy` gọi `RapierScenes.PlaceProxy` rồi đặt body theo tư thế `Transform`; `EndProxy` trả loại cũ.
-- Thứ tự gắn body theo `ObjectId` để id body và thứ tự giải của Rapier ở client giống server (08.16 phát hiện: trước đây theo thứ tự duyệt `HashSet`).
+- Component đặt trên GameObject của `NetworkManager` và được gán vào trường `physics` của manager. `Backend` là `Rapier`. Trường `gravity` mặc định là (0, -9.81, 0).
+- `Begin` lấy `NetworkManager` trên cùng GameObject (không có thì ném), rồi tạo `RapierScenes` và `RapierContacts`. Gọi `Begin` lần hai cũng ném. `Release` trả `Rigidbody` về trạng thái cũ, gỡ mọi component chạm đã nhận và hủy mọi thế giới.
+- Mỗi lần Core hỏi các thế giới cần bước (`WorldsToStep`), component làm bốn việc theo thứ tự:
+  1. Đồng bộ scene. Mỗi scene Unity đã nạp có `SceneId` trong danh sách scene mạng của manager được nạp tệp scene một lần, qua `SceneRegistry.TryGetSceneFile` và registry của manager. Scene không có tệp hoặc có tệp hỏng được ghi cảnh báo hoặc lỗi một lần, rồi chạy không có hình học tĩnh. Scene đã gỡ thì thế giới của nó cũng bị gỡ.
+  2. Đồng bộ body. Object trong `Spawned` của server và của client được gắn body theo thứ tự `ObjectId`; object đã despawn hoặc bị hủy được gỡ body.
+  3. Nhận component chạm trên các object có body.
+  4. Trả các thế giới, mỗi thế giới bọc trong một lớp ghi tư thế body về `Transform` sau `Step` và sau `Load`, trừ body đại diện.
+- Body được mô tả bằng `BodyDescriptions.TryDescribe` và `TryDescribe2D` (bản có `sources`) trên GameObject của object, trong thế giới của scene chứa object. `Rigidbody` chuyển sang kinematic và `Rigidbody2D` sang `Kinematic`; trạng thái cũ được nhớ để trả lại. Nếu object có collider không hỗ trợ, ngoại lệ được ghi vào log và object chạy không có body.
+- `BodyOf`, `Body2DOf` gắn body ngay nếu object chưa có. `WorldsOf(scene)` trả các thế giới của scene. `PlaceProxy` gọi `RapierScenes.PlaceProxy` rồi đặt body theo tư thế của `Transform`; `EndProxy` trả lại loại cũ.
+- Body được gắn theo thứ tự `ObjectId` để id body và thứ tự giải của Rapier ở client giống server. 08.16 phát hiện điểm này; trước đó thứ tự gắn là thứ tự duyệt một `HashSet`.
 
 ### Nguồn tập chạm (`RapierContacts`)
 
-- Mỗi thế giới có một `ContactTracker<Collider>` hoặc `ContactTracker<Collider2D>`, tạo khi nhận component đầu tiên; `TrackerOf` của `RapierPhysics` trả tracker của thế giới bên trong lớp bọc.
-- Bảng collider: với body, `sources` của bộ chuyển cho chỉ số collider (các mảnh liên tiếp của một nguồn gộp thành một mục có số mảnh); với scene, `BodyDescriptions.StaticColliders*` cho chỉ số tĩnh. Số phần tử khác số collider của tệp thì cảnh báo và scene đó không có bảng tĩnh.
-- `Collect(own, into)`: tra `own` ra thế giới và các `RapierCollider` của nó, gọi `Touching`, đổi kết quả: collider tĩnh qua bảng tĩnh, collider của body qua `RapierScenes.EntityOf` rồi `sources` của object. Kết quả không đổi được (object không thuộc manager này) bị bỏ.
-- Nhận component (Q166 (3) A): mỗi bước, `NetworkTrigger`, `NetworkCollision` dưới object có body 3D gắn vào tracker 3D của thế giới body; `NetworkTrigger2D`, `NetworkCollision2D` với body 2D. Khi nạp scene, component trên vật tĩnh của scene (không dưới `NetworkObject`) gắn vào tracker của thế giới scene. `Attach` trả sai khi component đã có chủ, nên với host hoặc nhiều manager trong một tiến trình, backend nhận trước giữ component. Gỡ khi bỏ body, gỡ scene và ở `Release`.
+- Mỗi thế giới có một `ContactTracker<Collider>` hoặc `ContactTracker<Collider2D>`, tạo khi nhận component đầu tiên. `TrackerOf` của `RapierPhysics` trả tracker của thế giới nằm trong lớp bọc.
+- Với body, `sources` của bộ chuyển cho biết collider Unity ứng với mỗi chỉ số; các mảnh liên tiếp của cùng một nguồn gộp thành một mục kèm số mảnh. Với scene, `BodyDescriptions.StaticColliders*` cho chỉ số tĩnh. Nếu số phần tử khác số collider trong tệp, component ghi cảnh báo và scene đó không có bảng tĩnh.
+- `Collect(own, into)` tra `own` ra thế giới và các `RapierCollider` của nó rồi gọi `Touching`. Collider tĩnh trong kết quả đổi về `Collider` Unity qua bảng tĩnh; collider của body đổi qua `RapierScenes.EntityOf` rồi `sources` của object. Kết quả không đổi được, ví dụ của object thuộc manager khác, bị bỏ.
+- Theo Q166 (3) A, mỗi bước component nhận `NetworkTrigger`, `NetworkCollision` dưới object có body 3D vào tracker 3D của thế giới chứa body, và `NetworkTrigger2D`, `NetworkCollision2D` dưới object có body 2D vào tracker 2D. Khi nạp scene, component trên vật tĩnh của scene (không nằm dưới `NetworkObject`) được gắn vào tracker của thế giới scene. `Attach` trả sai khi component đã có chủ, nên với host hoặc nhiều manager trong một tiến trình, backend nhận trước giữ component. Component được gỡ khi bỏ body, khi gỡ scene và khi `Release`.
 
 ### Project kiểm
 
-- `test-project/` với `manifest.json` trỏ `file:` tới Core ở `../unity` và tới package này; `testables` gồm cả hai.
-- `Tools/unity-windows-check.sh` chép repo và Core sang `C:\Users\<user>\unity-check-rapier`, chạy Unity batchmode với `-assemblyNames Fomoxa.Unity.Rapier.Tests` (biến `TEST_FILTER` thêm `-testFilter`; biến `FOMOXA_CORE` đổi nguồn Core), chép `.meta` mới về.
-- `.meta` của binary: tệp Linux bật cho Editor Linux và Standalone Linux64, tệp Windows cho Editor Windows và Standalone Win64, cùng CPU x86_64.
+- `manifest.json` của `test-project/` trỏ `file:` tới Core ở `../unity` và tới package này; `testables` gồm cả hai package.
+- `Tools/unity-windows-check.sh` chép repo và Core sang `C:\Users\<user>\unity-check-rapier`, chạy Unity batchmode với `-assemblyNames Fomoxa.Unity.Rapier.Tests`, rồi chép các `.meta` mới về. Biến `TEST_FILTER` thêm `-testFilter`, biến `FOMOXA_CORE` đổi nguồn Core.
+- `.meta` của tệp Linux bật cho Editor Linux và Standalone Linux64; `.meta` của tệp Windows bật cho Editor Windows và Standalone Win64. Cả hai đặt CPU x86_64.
 
 ---
 

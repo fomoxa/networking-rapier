@@ -1,6 +1,6 @@
 # 08.14 — Tầng 1: thế giới Rapier 2D, `RapierWorld2D`
 
-> Bước con 08.14 (kế hoạch: `implementation/08-prediction-physics.md` của repo `unity`, mục 8b). Phần 2D dùng chung crate, `lib.rs`, `hash.rs`, `contact.rs`, `RapierNative.cs` với 08.13 (listing ở [`08-13-tier1-rapier-3d.md`](08-13-tier1-rapier-3d.md)). Listing là mã hiện tại, gồm phần tập chạm (08.15). Test: `dotnet test` 33/33 trên Linux (.NET 8) và Windows (.NET 9).
+> Bước con 08.14; kế hoạch ở mục 8b của `implementation/08-prediction-physics.md` trong repo `unity`. Phần 2D dùng chung crate, `lib.rs`, `hash.rs`, `contact.rs` và `RapierNative.cs` với 08.13; listing của các tệp đó nằm ở [`08-13-tier1-rapier-3d.md`](08-13-tier1-rapier-3d.md). Listing trong tệp này là mã hiện tại, nên có cả phần tập chạm (08.15). Test: `dotnet test` 33/33 trên Linux (.NET 8) và Windows (.NET 9).
 
 | | Việc | Trạng thái |
 |---|---|:---:|
@@ -15,11 +15,11 @@
 
 ## 1. Tổng quan
 
-- `world2d.rs` lặp lại cấu trúc của `world3d.rs` với kiểu 2D: `FrCollider2D` (tư thế cục bộ là vị trí 2 chiều và góc `f32`, không có chỉ số tam giác), `FrBodyState2D` (vị trí, góc, vận tốc, vận tốc góc vô hướng), `FrRayHit2D`. Body, công thức dựng, khối lượng theo mật độ, xóa lực sau bước, chụp `bincode` có số định dạng, `Load` theo body, băm, truy vấn duyệt mọi collider, `user_data` của collider, `ActiveCollisionTypes` giống 3D.
-- Shape (mã trùng thứ tự `ShapeKind2D` của Core): `Box` là `cuboid`; `Circle` là `ball`; `Capsule` là `capsule_y` (trục dọc; bộ chuyển của `Fomoxa.Unity` xoay một phần tư vòng cho viên nang ngang); `ConvexPolygon` là `convex_hull` của các điểm (điểm suy biến thì từ chối); `Polyline` là `polyline` nối các điểm liên tiếp, chỉ dùng cho body tĩnh (bộ chuyển khép kín đường của `PolygonCollider2D` tĩnh bằng cách lặp điểm đầu).
-- Góc 2D là radian quanh trục Z, cùng chiều với Unity.
-- `RapierWorld2D`: cùng hành vi với `RapierWorld` (lỗi khi crate từ chối, thế giới đã hủy, bản chụp của backend khác), với `BodyState2D`, `RayHit2D`, lực và xung lực `Vector2`; thêm `StateHash`, `SetLayerCollisions`, `AddStatic`, `SetKind`, `IsDisposed`, `Touching` (08.15).
-- Băm cố định của chồng vật 2D: `0x8DC0037A8661A2C5`, giống nhau trên Linux và Windows.
+- `world2d.rs` có cùng cấu trúc với `world3d.rs`, đổi sang kiểu 2D. `FrCollider2D` mang tư thế cục bộ gồm vị trí hai chiều và góc `f32`, và không có chỉ số tam giác. `FrBodyState2D` gồm vị trí, góc, vận tốc và vận tốc góc vô hướng; kết quả tia là `FrRayHit2D`. Phần còn lại giống 3D: body và công thức dựng, khối lượng theo mật độ, xóa lực sau bước, bản chụp `bincode` có số định dạng, `Load` theo body, băm, truy vấn duyệt mọi collider, `user_data` của collider và `ActiveCollisionTypes`.
+- Mã shape theo thứ tự `ShapeKind2D` của Core. `Box` dựng bằng `cuboid`, `Circle` bằng `ball`. `Capsule` dựng bằng `capsule_y` theo trục dọc; với viên nang ngang, bộ chuyển của `Fomoxa.Unity` xoay thêm một phần tư vòng. `ConvexPolygon` là `convex_hull` của các điểm, và tập điểm suy biến bị từ chối. `Polyline` nối các điểm liên tiếp và chỉ dùng cho body tĩnh; với `PolygonCollider2D` tĩnh, bộ chuyển khép đường bằng cách lặp lại điểm đầu.
+- Góc 2D tính bằng radian quanh trục Z, cùng chiều với Unity.
+- `RapierWorld2D` báo lỗi giống `RapierWorld` khi crate từ chối, khi thế giới đã hủy và khi bản chụp thuộc backend khác, nhưng dùng `BodyState2D`, `RayHit2D` và lực, xung lực kiểu `Vector2`. Lớp cũng có `StateHash`, `SetLayerCollisions`, `AddStatic`, `SetKind`, `IsDisposed` và `Touching` (08.15).
+- Băm cố định của chồng vật 2D là `0x8DC0037A8661A2C5`, giống nhau trên Linux và Windows.
 
 ---
 

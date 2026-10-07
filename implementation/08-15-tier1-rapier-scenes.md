@@ -1,6 +1,6 @@
 # 08.15 — Tầng 1: `RapierScenes`, tập chạm của thế giới
 
-> Bước con 08.15 (kế hoạch và hợp đồng: `implementation/08-prediction-physics.md` của repo `unity`, mục 8b, "Hợp đồng đề xuất của 08.15: nguồn tập chạm"), phần không tham chiếu `UnityEngine`. Phần tập chạm trong crate (`contact.rs`, `touching` của `world3d.rs`, `world2d.rs`) có listing ở [`08-13-tier1-rapier-3d.md`](08-13-tier1-rapier-3d.md), [`08-14-tier1-rapier-2d.md`](08-14-tier1-rapier-2d.md). Test: `dotnet test` 33/33 trên Linux (.NET 8) và Windows (.NET 9).
+> Phần không tham chiếu `UnityEngine` của bước con 08.15. Kế hoạch và hợp đồng nằm ở mục "Hợp đồng đề xuất của 08.15: nguồn tập chạm" của `implementation/08-prediction-physics.md` trong repo `unity`. Listing phần tập chạm trong crate (`contact.rs`, hàm `touching` của `world3d.rs`, `world2d.rs`) nằm ở [`08-13-tier1-rapier-3d.md`](08-13-tier1-rapier-3d.md) và [`08-14-tier1-rapier-2d.md`](08-14-tier1-rapier-2d.md). Test: `dotnet test` 33/33 trên Linux (.NET 8) và Windows (.NET 9).
 
 | | Việc | Trạng thái |
 |---|---|:---:|
@@ -18,26 +18,26 @@
 
 ### `RapierScenes`
 
-- Một `RapierWorld` và một `RapierWorld2D` cho mỗi `sceneId` (0 là object ngoài scene mạng), trong `SortedDictionary` để thứ tự bước cố định: `WorldsToStep` trả mọi thế giới 3D theo `sceneId` rồi mọi thế giới 2D theo `sceneId`.
-- `LoadScene(file)`: nhớ ma trận layer 3D, 2D của tệp theo `sceneId`; chỉ tạo thế giới của chiều mà tệp có collider; đặt ma trận rồi thêm collider tĩnh. Thế giới tạo sau đó (`WorldOf`, `WorldOf2D` khi thêm body) nhận ma trận đã nhớ. Hình học hỏng (bao lồi suy biến, lưới lỗi) ném `InvalidDataException` yêu cầu xuất lại scene; ma trận không đủ 32 mặt nạ ném `ArgumentException`.
-- `UnloadScene`: bỏ ma trận đã nhớ, hủy hai thế giới của scene, bỏ lịch sử và bảng chủ body của chúng.
-- `AddBody`, `AddBody2D` tạo body trong thế giới của `sceneId` và nhớ entity sở hữu; `RemoveBodies` xóa mọi body của entity.
-- Body đại diện (`PlaceProxy`): đổi body sang `Kinematic`, đánh dấu không chạy lại được (`Load` giữ trạng thái hiện tại), nhớ loại cũ; `EndProxy` trả loại cũ và cho chạy lại.
-- `HistoryOf(world, capacity)`: một `PhysicsHistory` mỗi thế giới.
-- Gravity truyền vào constructor (mặc định (0, -9.81, 0)); thế giới 2D lấy X, Y. Constructor gọi `RapierPackage.CheckCore`.
-- `TrackerOf` trả `null`: backend console không có component sự kiện chạm.
+- Mỗi `sceneId` có một `RapierWorld` và một `RapierWorld2D`; `sceneId` 0 dành cho object ngoài scene mạng. Hai bảng thế giới là `SortedDictionary`, nên thứ tự bước cố định: `WorldsToStep` trả mọi thế giới 3D theo `sceneId`, rồi mọi thế giới 2D theo `sceneId`.
+- `LoadScene(file)` nhớ ma trận layer 3D và 2D của tệp theo `sceneId`, và chỉ tạo thế giới cho chiều mà tệp có collider. Với thế giới đó, hàm đặt ma trận rồi thêm collider tĩnh. Thế giới tạo về sau, khi `WorldOf` hoặc `WorldOf2D` được gọi để thêm body, cũng nhận ma trận đã nhớ. Hình học hỏng (bao lồi suy biến, lưới lỗi) ném `InvalidDataException` kèm yêu cầu xuất lại scene. Ma trận không đủ 32 mặt nạ ném `ArgumentException`.
+- `UnloadScene` bỏ ma trận đã nhớ và hủy hai thế giới của scene, cùng lịch sử và bảng chủ body của chúng.
+- `AddBody`, `AddBody2D` tạo body trong thế giới của `sceneId` và ghi lại entity sở hữu. `RemoveBodies` xóa mọi body của một entity.
+- `PlaceProxy` đổi body của entity sang `Kinematic`, đánh dấu không chạy lại được để `Load` giữ trạng thái hiện tại, và nhớ loại cũ. `EndProxy` trả lại loại cũ và cho chạy lại.
+- `HistoryOf(world, capacity)` trả một `PhysicsHistory` cho mỗi thế giới.
+- Constructor nhận gravity, mặc định (0, -9.81, 0); thế giới 2D lấy thành phần X, Y. Constructor gọi `RapierPackage.CheckCore`.
+- `TrackerOf` trả `null`, vì backend console không có component sự kiện chạm.
 
 ### Tập chạm (Q166 (1) A, (2) A)
 
-- `RapierCollider`: body (handle không hợp lệ nghĩa là collider tĩnh) và chỉ số. Chỉ số của collider tĩnh là thứ tự trong `AddStatic` của thế giới, tức thứ tự `SceneFile.Colliders`/`Colliders2D` vì một thế giới chỉ có hình học của một scene. Chỉ số trong body là thứ tự `BodyDesc.Colliders`.
-- `Touching(collider, into)` thêm vào `into` các collider đang chạm sau `Step` gần nhất: collider là sensor thì các cặp giao nhau đang `intersecting`; không thì các cặp tiếp xúc có `has_any_active_contact` (gồm tiếp xúc trong khoảng dự đoán của Rapier và tiếp xúc dự báo theo vận tốc). Collider không có trong thế giới thì không thêm gì. Bộ đệm phía C# nới khi crate báo nhiều hơn sức chứa.
-- Cặp giữa body kinematic và tĩnh, giữa hai body kinematic có tập chạm (`ActiveCollisionTypes` trừ `FIXED_FIXED`); các cặp đó không sinh lực, băm chuẩn 3D, 2D không đổi.
-- `Load` khôi phục pha hẹp cùng thế giới, nên `Touching` sau `Load` là tập chạm của tick đã chụp.
-- `EntityOf(world, body)`: entity sở hữu body (bảng theo cặp thế giới và handle, cập nhật khi thêm, xóa body và gỡ scene). `TryGetBody(entity, world, out body)`: handle body của entity trong một thế giới.
+- `RapierCollider` gồm body và chỉ số; handle body không hợp lệ nghĩa là collider tĩnh. Mỗi thế giới chỉ chứa hình học của một scene, nên chỉ số của collider tĩnh, tức thứ tự trong `AddStatic`, trùng thứ tự của `SceneFile.Colliders` hoặc `Colliders2D`. Chỉ số trong body là thứ tự của `BodyDesc.Colliders`.
+- `Touching(collider, into)` thêm vào `into` các collider đang chạm sau `Step` gần nhất. Với sensor, đó là các cặp giao nhau đang `intersecting`. Với collider thường, đó là các cặp tiếp xúc có `has_any_active_contact`, gồm cả tiếp xúc trong khoảng dự đoán của Rapier và tiếp xúc dự báo theo vận tốc. Collider không có trong thế giới thì hàm không thêm gì. Phía C# nới bộ đệm khi crate báo nhiều kết quả hơn sức chứa.
+- Cặp giữa body kinematic và body tĩnh, và giữa hai body kinematic, cũng có tập chạm nhờ `ActiveCollisionTypes` trừ `FIXED_FIXED`. Các cặp này không sinh lực, nên băm chuẩn 3D và 2D không đổi.
+- `Load` khôi phục pha hẹp cùng với thế giới, nên `Touching` sau `Load` trả tập chạm của tick đã chụp.
+- `EntityOf(world, body)` trả entity sở hữu body, tra theo cặp thế giới và handle; bảng này cập nhật khi thêm, xóa body và khi gỡ scene. `TryGetBody(entity, world, out body)` trả handle body của entity trong một thế giới.
 
 ### Khác hợp đồng
 
-- `TryGetBody` thêm so với hợp đồng: phần Unity cần handle của body vừa tạo để dựng bảng collider, mà `PhysicsBody` không lộ handle.
+- `TryGetBody` không có trong hợp đồng. Phần Unity cần handle của body vừa tạo để dựng bảng collider, mà `PhysicsBody` không lộ handle.
 
 ---
 

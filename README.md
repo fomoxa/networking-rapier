@@ -1,8 +1,8 @@
 # networking-rapier
 
-Backend physics Rapier cho `com.fomoxa.networking` (repo `unity`): package Unity `com.fomoxa.networking.rapier`, crate FFI `fomoxa-rapier` trên `rapier3d`, `rapier2d` 0.36.0 với `enhanced-determinism`, binary native cho Windows x64 và Linux x64, test và phép kiểm hai phía giữa server console và client Unity.
+Repo này chứa backend physics Rapier của `com.fomoxa.networking`. Package Unity `com.fomoxa.networking.rapier` gọi crate FFI `fomoxa-rapier`, crate này dựng trên `rapier3d` và `rapier2d` 0.36.0 với feature `enhanced-determinism`. Binary native cho Windows x64 và Linux x64 được commit cùng mã nguồn. Repo cũng có test và phép kiểm hai phía giữa server console và client Unity.
 
-Backend là tùy chọn và nằm ở repo riêng (Q163 (2) C): Core không biết Rapier, bản sửa của Rapier phát hành lại package này mà không phát hành lại `com.fomoxa.networking`. Thiết kế ở repo `unity` (`design/principles.md` P27, `design/open-questions.md` Q163 – Q166); bản thi công ở [`implementation/`](implementation/README.md); hướng dẫn dùng ở [README của package](com.fomoxa.networking.rapier/README.md).
+Backend là tùy chọn nên nằm ở repo riêng (Q163 (2) C). Core không biết Rapier, và một bản sửa của Rapier chỉ cần phát hành lại package này. Thiết kế nằm ở repo `unity` (`design/principles.md` P27, `design/open-questions.md` Q163 – Q166). Bản thi công ở [`implementation/`](implementation/README.md), hướng dẫn dùng ở [README của package](com.fomoxa.networking.rapier/README.md).
 
 ```
 game Unity / server console
@@ -28,7 +28,7 @@ implementation/                  bản thi công các bước 08.13 – 08.16
 
 ## Phụ thuộc lúc phát triển
 
-- Repo `unity` clone cạnh repo này (`../unity`): test `dotnet`, project Unity và server kiểm hai phía lấy Core từ `../unity/com.fomoxa.networking`. Cách CI lấy Core chưa định, nên repo chưa có CI.
+- Repo `unity` clone cạnh repo này (`../unity`). Test `dotnet`, project Unity và server kiểm hai phía lấy Core từ `../unity/com.fomoxa.networking`. Repo chưa có CI vì cách CI lấy Core chưa định.
 - Rust (stable) cho build Linux; `cargo.exe` của Windows cho build Windows từ WSL.
 - .NET SDK 8 trên Linux; .NET SDK 9 trên Windows cho server kiểm hai phía.
 - Unity 6000.5.7f1 trên Windows cho test Unity và phép kiểm hai phía.
@@ -43,7 +43,7 @@ implementation/                  bản thi công các bước 08.13 – 08.16
 | Kiểm hai phía | `Tools/two-sided-check.sh linux`, `Tools/two-sided-check.sh windows` |
 | Ghi chú bên thứ ba | `python3 Tools/third-party-notices.py` |
 
-Binary native được commit và build bằng tay; không có CI build hay phát hành binary. Đổi crate thì build lại cả hai nền tảng, chạy lại test hai nền tảng và phép kiểm hai phía.
+Binary native được build bằng tay rồi commit; không có CI build hay phát hành binary. Sau khi đổi crate, build lại cả hai nền tảng rồi chạy lại test trên hai nền tảng và phép kiểm hai phía.
 
 ## Giấy phép
 
