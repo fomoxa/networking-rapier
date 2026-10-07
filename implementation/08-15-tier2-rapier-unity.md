@@ -1,51 +1,51 @@
-# 08.15 — Tầng 2: `RapierPhysics`, nguồn tập chạm ở Unity
+# 08.15 — Tier 2: `RapierPhysics` and the contact source in Unity
 
-> Phần Unity của package trong bước con 08.15; kế hoạch và hợp đồng ở mục 8b của `implementation/08-prediction-physics.md` trong repo `unity`. Điểm cắm ở `Fomoxa.Unity` (`IContactQuery`, `Attach`, `Detach`, `TryDescribe*` có `sources`, `StaticColliders*`) làm ở repo `unity` và mô tả trong `implementation/08-15-tier2-contact-attach.md` của repo đó. Test: Unity EditMode 7/7 trên Unity 6000.5.7f1 (Windows); một test nữa bị bỏ qua vì đó là phép kiểm hai phía của 08.16.
+> The Unity part of the package in sub-step 08.15; the plan and the contract are in the 8b section of `implementation/08-prediction-physics.md` in the `unity` repository. The plug-in point in `Fomoxa.Unity` (`IContactQuery`, `Attach`, `Detach`, `TryDescribe*` with `sources`, `StaticColliders*`) is done in the `unity` repository and described in its `implementation/08-15-tier2-contact-attach.md`. Tests: Unity EditMode 7/7 on Unity 6000.5.7f1 (Windows); one more test is skipped because it is the two-sided check of 08.16.
 
-| | Việc | Trạng thái |
+| | Work | Status |
 |---|---|:---:|
 | 1 | Assembly `Fomoxa.Unity.Rapier`; `RapierPhysics : NetworkPhysics` | ✅ |
-| 2 | Nạp collider tĩnh của tệp scene khi scene mạng được nạp, gỡ khi scene gỡ | ✅ |
-| 3 | Body từ prefab qua bộ chuyển của 08.10, theo thứ tự `ObjectId`; tư thế về `Transform` mỗi bước và sau `Load` | ✅ |
-| 4 | Body đại diện ở client | ✅ |
-| 5 | Nguồn tập chạm: tracker mỗi thế giới, nhận component, đổi collider Rapier sang `Collider`/`Collider2D` | ✅ |
-| 6 | `.meta` của binary theo nền tảng; project Unity kiểm; `Tools/unity-windows-check.sh` | ✅ |
+| 2 | Static colliders loaded from the scene file when a network scene loads, removed when it unloads | ✅ |
+| 3 | Bodies from prefabs through the 08.10 converter, in `ObjectId` order; poses written back to `Transform` after every step and after `Load` | ✅ |
+| 4 | Proxy bodies on the client | ✅ |
+| 5 | Contact source: a tracker per world, component takeover, Rapier colliders mapped back to `Collider`/`Collider2D` | ✅ |
+| 6 | Per-platform `.meta` files of the libraries; Unity test project; `Tools/unity-windows-check.sh` | ✅ |
 
-**Luật:** P27 (Q163 (5) A; Q164 (3) A, (4.1) A, (4.2) A; Q165 (4) A; Q166 (1) A, (2) A, (3) A).
+**Rules:** P27 (Q163 (5) A; Q164 (3) A, (4.1) A, (4.2) A; Q165 (4) A; Q166 (1) A, (2) A, (3) A).
 
 ---
 
-## 1. Tổng quan
+## 1. Overview
 
 ### `RapierPhysics`
 
-- Component đặt trên GameObject của `NetworkManager` và được gán vào trường `physics` của manager. `Backend` là `Rapier`. Trường `gravity` mặc định là (0, -9.81, 0).
-- `Begin` lấy `NetworkManager` trên cùng GameObject (không có thì ném), rồi tạo `RapierScenes` và `RapierContacts`. Gọi `Begin` lần hai cũng ném. `Release` trả `Rigidbody` về trạng thái cũ, gỡ mọi component chạm đã nhận và hủy mọi thế giới.
-- Mỗi lần Core hỏi các thế giới cần bước (`WorldsToStep`), component làm bốn việc theo thứ tự:
-  1. Đồng bộ scene. Mỗi scene Unity đã nạp có `SceneId` trong danh sách scene mạng của manager được nạp tệp scene một lần, qua `SceneRegistry.TryGetSceneFile` và registry của manager. Scene không có tệp hoặc có tệp hỏng được ghi cảnh báo hoặc lỗi một lần, rồi chạy không có hình học tĩnh. Scene đã gỡ thì thế giới của nó cũng bị gỡ.
-  2. Đồng bộ body. Object trong `Spawned` của server và của client được gắn body theo thứ tự `ObjectId`; object đã despawn hoặc bị hủy được gỡ body.
-  3. Nhận component chạm trên các object có body.
-  4. Trả các thế giới, mỗi thế giới bọc trong một lớp ghi tư thế body về `Transform` sau `Step` và sau `Load`, trừ body đại diện.
-- Body được mô tả bằng `BodyDescriptions.TryDescribe` và `TryDescribe2D` (bản có `sources`) trên GameObject của object, trong thế giới của scene chứa object. `Rigidbody` chuyển sang kinematic và `Rigidbody2D` sang `Kinematic`; trạng thái cũ được nhớ để trả lại. Nếu object có collider không hỗ trợ, ngoại lệ được ghi vào log và object chạy không có body.
-- `BodyOf`, `Body2DOf` gắn body ngay nếu object chưa có. `WorldsOf(scene)` trả các thế giới của scene. `PlaceProxy` gọi `RapierScenes.PlaceProxy` rồi đặt body theo tư thế của `Transform`; `EndProxy` trả lại loại cũ.
-- Body được gắn theo thứ tự `ObjectId` để id body và thứ tự giải của Rapier ở client giống server. 08.16 phát hiện điểm này; trước đó thứ tự gắn là thứ tự duyệt một `HashSet`.
+- The component sits on the GameObject of the `NetworkManager` and is assigned to the manager's `physics` field. `Backend` is `Rapier`. The `gravity` field defaults to (0, -9.81, 0).
+- `Begin` takes the `NetworkManager` on the same GameObject (and throws if there is none), then creates `RapierScenes` and `RapierContacts`. A second `Begin` also throws. `Release` restores each `Rigidbody`, detaches every contact component it took over and disposes every world.
+- Each time the Core asks for the worlds to step (`WorldsToStep`), the component does four things in order:
+  1. Scene sync. Each loaded Unity scene whose `SceneId` is in the manager's network scene list gets its scene file loaded once, through `SceneRegistry.TryGetSceneFile` and the manager's registry. A scene without a file, or with a broken one, logs a warning or an error once and runs without static geometry. When a scene is unloaded, its worlds are unloaded too.
+  2. Body sync. Objects in `Spawned` of the server and of the client get bodies in `ObjectId` order; objects that were despawned or destroyed lose them.
+  3. Takeover of the contact components on objects that have bodies.
+  4. Returning the worlds, each wrapped in a layer that writes body poses back to `Transform` after `Step` and after `Load`, except for proxy bodies.
+- A body is described with `BodyDescriptions.TryDescribe` and `TryDescribe2D` (the overloads with `sources`) on the object's GameObject, in the world of the scene that holds the object. `Rigidbody` is switched to kinematic and `Rigidbody2D` to `Kinematic`; the previous state is kept so it can be restored. If the object has an unsupported collider, the exception is logged and the object runs without a body.
+- `BodyOf` and `Body2DOf` create the body right away if the object has none. `WorldsOf(scene)` returns the worlds of a scene. `PlaceProxy` calls `RapierScenes.PlaceProxy` and then sets the body to the `Transform` pose; `EndProxy` restores the old kind.
+- Bodies are created in `ObjectId` order so that body ids and Rapier's solver order on the client match the server. 08.16 found this; before, the order was the iteration order of a `HashSet`.
 
-### Nguồn tập chạm (`RapierContacts`)
+### Contact source (`RapierContacts`)
 
-- Mỗi thế giới có một `ContactTracker<Collider>` hoặc `ContactTracker<Collider2D>`, tạo khi nhận component đầu tiên. `TrackerOf` của `RapierPhysics` trả tracker của thế giới nằm trong lớp bọc.
-- Với body, `sources` của bộ chuyển cho biết collider Unity ứng với mỗi chỉ số; các mảnh liên tiếp của cùng một nguồn gộp thành một mục kèm số mảnh. Với scene, `BodyDescriptions.StaticColliders*` cho chỉ số tĩnh. Nếu số phần tử khác số collider trong tệp, component ghi cảnh báo và scene đó không có bảng tĩnh.
-- `Collect(own, into)` tra `own` ra thế giới và các `RapierCollider` của nó rồi gọi `Touching`. Collider tĩnh trong kết quả đổi về `Collider` Unity qua bảng tĩnh; collider của body đổi qua `RapierScenes.EntityOf` rồi `sources` của object. Kết quả không đổi được, ví dụ của object thuộc manager khác, bị bỏ.
-- Theo Q166 (3) A, mỗi bước component nhận `NetworkTrigger`, `NetworkCollision` dưới object có body 3D vào tracker 3D của thế giới chứa body, và `NetworkTrigger2D`, `NetworkCollision2D` dưới object có body 2D vào tracker 2D. Khi nạp scene, component trên vật tĩnh của scene (không nằm dưới `NetworkObject`) được gắn vào tracker của thế giới scene. `Attach` trả sai khi component đã có chủ, nên với host hoặc nhiều manager trong một tiến trình, backend nhận trước giữ component. Component được gỡ khi bỏ body, khi gỡ scene và khi `Release`.
+- Each world has one `ContactTracker<Collider>` or `ContactTracker<Collider2D>`, created when the first component is taken over. `TrackerOf` of `RapierPhysics` returns the tracker of the world inside the wrapper.
+- For a body, the converter's `sources` give the Unity collider for each index; consecutive pieces of the same source form one entry with a piece count. For a scene, `BodyDescriptions.StaticColliders*` gives the static indices. If the count differs from the number of colliders in the file, the component logs a warning and the scene has no static table.
+- `Collect(own, into)` looks up the world and the `RapierCollider`s of `own` and calls `Touching`. Static colliders in the result map back to Unity colliders through the static table; body colliders map back through `RapierScenes.EntityOf` and then the object's `sources`. Results that cannot be mapped, such as colliders of objects owned by another manager, are dropped.
+- Per Q166 (3) A, on every step the component takes over `NetworkTrigger` and `NetworkCollision` under objects with a 3D body into the 3D tracker of that body's world, and `NetworkTrigger2D` and `NetworkCollision2D` under objects with a 2D body into the 2D tracker. When a scene loads, components on the scene's static objects (not under a `NetworkObject`) are attached to the tracker of the scene's world. `Attach` returns false when a component already has an owner, so with a host or several managers in one process, the backend that takes a component first keeps it. Components are detached when their body is removed, when their scene unloads and on `Release`.
 
-### Project kiểm
+### Test project
 
-- `manifest.json` của `test-project/` trỏ `file:` tới Core ở `../unity` và tới package này; `testables` gồm cả hai package.
-- `Tools/unity-windows-check.sh` chép repo và Core sang `C:\Users\<user>\unity-check-rapier`, chạy Unity batchmode với `-assemblyNames Fomoxa.Unity.Rapier.Tests`, rồi chép các `.meta` mới về. Biến `TEST_FILTER` thêm `-testFilter`, biến `FOMOXA_CORE` đổi nguồn Core.
-- `.meta` của tệp Linux bật cho Editor Linux và Standalone Linux64; `.meta` của tệp Windows bật cho Editor Windows và Standalone Win64. Cả hai đặt CPU x86_64.
+- The `manifest.json` of `test-project/` points with `file:` to the Core in `../unity` and to this package; `testables` lists both packages.
+- `Tools/unity-windows-check.sh` copies the repository and the Core to `C:\Users\<user>\unity-check-rapier`, runs Unity in batch mode with `-assemblyNames Fomoxa.Unity.Rapier.Tests` and copies new `.meta` files back. The `TEST_FILTER` variable adds `-testFilter`, and the `FOMOXA_CORE` variable changes where the Core comes from.
+- The `.meta` of the Linux library enables the Linux Editor and Standalone Linux64; the `.meta` of the Windows library enables the Windows Editor and Standalone Win64. Both set the CPU to x86_64.
 
 ---
 
-## 2. Mã
+## 2. Code
 
 `com.fomoxa.networking.rapier/Runtime/Unity/Fomoxa.Unity.Rapier.asmdef`:
 
@@ -1256,7 +1256,7 @@ echo "=== full log: $LOG ==="
 
 ---
 
-## 3. Test
+## 3. Tests
 
 `com.fomoxa.networking.rapier/Tests/Unity/Fomoxa.Unity.Rapier.Tests.asmdef`:
 
@@ -1660,12 +1660,12 @@ namespace Fomoxa.Unity.Rapier.Tests
 }
 ```
 
-| Test | Kiểm |
+| Test | Checks |
 |---|---|
-| `TheServerSimulatesSpawnedObjectsWithRapierAndMovesTheirTransforms` | Server mô phỏng object spawn bằng Rapier: bóng rơi lên object tĩnh có body; `Transform` theo body; khối lượng theo `Rigidbody`; `Rigidbody` thành kinematic khi chạy, trở lại sau `Release` |
-| `TwoDimensionalObjectsFallOntoTwoDimensionalGround` | Object 2D rơi lên nền 2D, giữ Z; `Rigidbody2D` thành `Kinematic`; chỉ có `Body2D` |
-| `TheStaticGeometryOfANetworkSceneComesFromItsSceneFile` | Nền tĩnh lấy từ tệp scene của scene đang mở |
-| `AClientKeepsTheObjectsItDoesNotPredictAsKinematicProxies` | Client giữ object không dự đoán làm body đại diện kinematic tại tư thế `Transform` |
-| `ACollisionOnABallReportsTheGroundOfTheSceneFile` | `NetworkCollision` của bóng được nhận, phát `OnEnter` với collider của nền tĩnh |
-| `AStaticTriggerSeesABallPassThroughUntilThePhysicsIsReleased` | `NetworkTrigger` trên vật tĩnh được nhận khi nạp scene; `Enter`, `Exit` khi bóng rơi qua; `Release` gỡ |
-| `AClientProxyWithATriggerTouchesTheStaticGeometryOfItsOwnWorld` | Ở client, trigger trên body đại diện (kinematic) chạm tường tĩnh của thế giới của client |
+| `TheServerSimulatesSpawnedObjectsWithRapierAndMovesTheirTransforms` | The server simulates spawned objects with Rapier: a ball falls onto a static object that has a body; `Transform` follows the body; the mass comes from `Rigidbody`; `Rigidbody` is kinematic while running and restored after `Release` |
+| `TwoDimensionalObjectsFallOntoTwoDimensionalGround` | A 2D object falls onto 2D ground and keeps its Z; `Rigidbody2D` becomes `Kinematic`; only `Body2D` exists |
+| `TheStaticGeometryOfANetworkSceneComesFromItsSceneFile` | The static ground comes from the scene file of the open scene |
+| `AClientKeepsTheObjectsItDoesNotPredictAsKinematicProxies` | The client keeps objects it does not predict as kinematic proxy bodies at the `Transform` pose |
+| `ACollisionOnABallReportsTheGroundOfTheSceneFile` | The ball's `NetworkCollision` is taken over and raises `OnEnter` with the static ground's collider |
+| `AStaticTriggerSeesABallPassThroughUntilThePhysicsIsReleased` | A `NetworkTrigger` on a static object is taken over when the scene loads; `Enter` and `Exit` as a ball falls through; `Release` detaches it |
+| `AClientProxyWithATriggerTouchesTheStaticGeometryOfItsOwnWorld` | On the client, a trigger on a kinematic proxy body touches a static wall of the client's world |

@@ -1,47 +1,47 @@
-# 08.15 — Tầng 1: `RapierScenes`, tập chạm của thế giới
+# 08.15 — Tier 1: `RapierScenes` and the contact sets of a world
 
-> Phần không tham chiếu `UnityEngine` của bước con 08.15. Kế hoạch và hợp đồng nằm ở mục "Hợp đồng đề xuất của 08.15: nguồn tập chạm" của `implementation/08-prediction-physics.md` trong repo `unity`. Listing phần tập chạm trong crate (`contact.rs`, hàm `touching` của `world3d.rs`, `world2d.rs`) nằm ở [`08-13-tier1-rapier-3d.md`](08-13-tier1-rapier-3d.md) và [`08-14-tier1-rapier-2d.md`](08-14-tier1-rapier-2d.md). Test: `dotnet test` 33/33 trên Linux (.NET 8) và Windows (.NET 9).
+> The part of sub-step 08.15 that does not reference `UnityEngine`. The plan and the contract are in the section "Hợp đồng đề xuất của 08.15: nguồn tập chạm" (proposed contract of 08.15: contact source) of `implementation/08-prediction-physics.md` in the `unity` repository. The listings of the contact code in the crate (`contact.rs` and the `touching` functions of `world3d.rs` and `world2d.rs`) are in [`08-13-tier1-rapier-3d.md`](08-13-tier1-rapier-3d.md) and [`08-14-tier1-rapier-2d.md`](08-14-tier1-rapier-2d.md). Tests: `dotnet test` 33/33 on Linux (.NET 8) and Windows (.NET 9).
 
-| | Việc | Trạng thái |
+| | Work | Status |
 |---|---|:---:|
-| 1 | `RapierScenes : IPhysicsScenes`: một thế giới mỗi scene và mỗi chiều, nạp hình học tĩnh từ tệp scene | ✅ |
-| 2 | Body của entity, body đại diện, lịch sử chụp theo thế giới | ✅ |
-| 3 | Tập chạm của collider: `fr_collider_touching`, `fr2_collider_touching`, `RapierCollider`, `Touching` | ✅ |
-| 4 | `EntityOf`, `TryGetBody` cho phần Unity | ✅ |
-| 5 | Test `dotnet`, gồm server console với client console | ✅ |
+| 1 | `RapierScenes : IPhysicsScenes`: one world per scene and per dimension, static geometry loaded from the scene file | ✅ |
+| 2 | Entity bodies, proxy bodies, snapshot history per world | ✅ |
+| 3 | Collider contact sets: `fr_collider_touching`, `fr2_collider_touching`, `RapierCollider`, `Touching` | ✅ |
+| 4 | `EntityOf` and `TryGetBody` for the Unity part | ✅ |
+| 5 | dotnet tests, including a console server with a console client | ✅ |
 
-**Luật:** P27 (Q163 (5) A, (7) A; Q165 (3) A, (4) A; Q166 (1) A, (2) A).
+**Rules:** P27 (Q163 (5) A, (7) A; Q165 (3) A, (4) A; Q166 (1) A, (2) A).
 
 ---
 
-## 1. Tổng quan
+## 1. Overview
 
 ### `RapierScenes`
 
-- Mỗi `sceneId` có một `RapierWorld` và một `RapierWorld2D`; `sceneId` 0 dành cho object ngoài scene mạng. Hai bảng thế giới là `SortedDictionary`, nên thứ tự bước cố định: `WorldsToStep` trả mọi thế giới 3D theo `sceneId`, rồi mọi thế giới 2D theo `sceneId`.
-- `LoadScene(file)` nhớ ma trận layer 3D và 2D của tệp theo `sceneId`, và chỉ tạo thế giới cho chiều mà tệp có collider. Với thế giới đó, hàm đặt ma trận rồi thêm collider tĩnh. Thế giới tạo về sau, khi `WorldOf` hoặc `WorldOf2D` được gọi để thêm body, cũng nhận ma trận đã nhớ. Hình học hỏng (bao lồi suy biến, lưới lỗi) ném `InvalidDataException` kèm yêu cầu xuất lại scene. Ma trận không đủ 32 mặt nạ ném `ArgumentException`.
-- `UnloadScene` bỏ ma trận đã nhớ và hủy hai thế giới của scene, cùng lịch sử và bảng chủ body của chúng.
-- `AddBody`, `AddBody2D` tạo body trong thế giới của `sceneId` và ghi lại entity sở hữu. `RemoveBodies` xóa mọi body của một entity.
-- `PlaceProxy` đổi body của entity sang `Kinematic`, đánh dấu không chạy lại được để `Load` giữ trạng thái hiện tại, và nhớ loại cũ. `EndProxy` trả lại loại cũ và cho chạy lại.
-- `HistoryOf(world, capacity)` trả một `PhysicsHistory` cho mỗi thế giới.
-- Constructor nhận gravity, mặc định (0, -9.81, 0); thế giới 2D lấy thành phần X, Y. Constructor gọi `RapierPackage.CheckCore`.
-- `TrackerOf` trả `null`, vì backend console không có component sự kiện chạm.
+- Each `sceneId` has one `RapierWorld` and one `RapierWorld2D`; `sceneId` 0 is for objects outside network scenes. Both world tables are `SortedDictionary`, so the step order is fixed: `WorldsToStep` returns every 3D world by `sceneId`, then every 2D world by `sceneId`.
+- `LoadScene(file)` remembers the 3D and 2D layer matrices of the file by `sceneId`, and only creates a world for a dimension in which the file has colliders. For that world it sets the matrix and then adds the static colliders. A world created later, when `WorldOf` or `WorldOf2D` is called to add a body, also gets the remembered matrix. Broken geometry (a degenerate hull, a faulty mesh) throws `InvalidDataException` with a request to export the scene again. A matrix with fewer than 32 masks throws `ArgumentException`.
+- `UnloadScene` drops the remembered matrices and disposes the two worlds of the scene, together with their history and their body owner table.
+- `AddBody` and `AddBody2D` create a body in the world of `sceneId` and record the owning entity. `RemoveBodies` removes every body of an entity.
+- `PlaceProxy` switches the entity's bodies to `Kinematic`, marks them as not rewindable so that `Load` keeps their current state, and remembers the old kind. `EndProxy` restores the old kind and makes them rewindable again.
+- `HistoryOf(world, capacity)` returns one `PhysicsHistory` per world.
+- The constructor takes the gravity, (0, -9.81, 0) by default; 2D worlds use its X and Y. The constructor calls `RapierPackage.CheckCore`.
+- `TrackerOf` returns `null`, because the console backend has no contact event components.
 
-### Tập chạm (Q166 (1) A, (2) A)
+### Contact sets (Q166 (1) A, (2) A)
 
-- `RapierCollider` gồm body và chỉ số; handle body không hợp lệ nghĩa là collider tĩnh. Mỗi thế giới chỉ chứa hình học của một scene, nên chỉ số của collider tĩnh, tức thứ tự trong `AddStatic`, trùng thứ tự của `SceneFile.Colliders` hoặc `Colliders2D`. Chỉ số trong body là thứ tự của `BodyDesc.Colliders`.
-- `Touching(collider, into)` thêm vào `into` các collider đang chạm sau `Step` gần nhất. Với sensor, đó là các cặp giao nhau đang `intersecting`. Với collider thường, đó là các cặp tiếp xúc có `has_any_active_contact`, gồm cả tiếp xúc trong khoảng dự đoán của Rapier và tiếp xúc dự báo theo vận tốc. Collider không có trong thế giới thì hàm không thêm gì. Phía C# nới bộ đệm khi crate báo nhiều kết quả hơn sức chứa.
-- Cặp giữa body kinematic và body tĩnh, và giữa hai body kinematic, cũng có tập chạm nhờ `ActiveCollisionTypes` trừ `FIXED_FIXED`. Các cặp này không sinh lực, nên băm chuẩn 3D và 2D không đổi.
-- `Load` khôi phục pha hẹp cùng với thế giới, nên `Touching` sau `Load` trả tập chạm của tick đã chụp.
-- `EntityOf(world, body)` trả entity sở hữu body, tra theo cặp thế giới và handle; bảng này cập nhật khi thêm, xóa body và khi gỡ scene. `TryGetBody(entity, world, out body)` trả handle body của entity trong một thế giới.
+- A `RapierCollider` is a body and an index; an invalid body handle means a static collider. Each world only holds the geometry of one scene, so the index of a static collider, its position in `AddStatic`, matches the order of `SceneFile.Colliders` or `Colliders2D`. The index within a body is the order of `BodyDesc.Colliders`.
+- `Touching(collider, into)` adds to `into` the colliders touching it after the last `Step`. For a sensor, those are the intersection pairs that are `intersecting`. For a regular collider, those are the contact pairs with `has_any_active_contact`, which includes contacts within Rapier's prediction distance and contacts predicted from the velocity. A collider that is not in the world adds nothing. The C# side grows its buffer when the crate reports more results than it can hold.
+- Pairs between a kinematic body and a static body, and between two kinematic bodies, also have contact sets, because `ActiveCollisionTypes` includes everything except `FIXED_FIXED`. These pairs produce no force, so the canonical 3D and 2D hashes did not change.
+- `Load` restores the narrow phase together with the world, so `Touching` after `Load` returns the contact set of the saved tick.
+- `EntityOf(world, body)` returns the entity that owns the body, looked up by world and handle; the table is updated when bodies are added or removed and when a scene is unloaded. `TryGetBody(entity, world, out body)` returns the handle of the entity's body in one world.
 
-### Khác hợp đồng
+### Differences from the contract
 
-- `TryGetBody` không có trong hợp đồng. Phần Unity cần handle của body vừa tạo để dựng bảng collider, mà `PhysicsBody` không lộ handle.
+- `TryGetBody` is not in the contract. The Unity part needs the handle of a body it just created to build its collider table, and `PhysicsBody` does not expose the handle.
 
 ---
 
-## 2. Mã
+## 2. Code
 
 `com.fomoxa.networking.rapier/Runtime/Rapier/RapierCollider.cs`:
 
@@ -480,7 +480,7 @@ namespace Fomoxa.Networking.Rapier
 }
 ```
 
-`Touching` của `RapierWorld` (`RapierWorld2D` giống, gọi `fr2_collider_touching`):
+`Touching` of `RapierWorld` (`RapierWorld2D` is the same and calls `fr2_collider_touching`):
 
 ```csharp
 public void Touching(RapierCollider collider, List<RapierCollider> into)
@@ -506,7 +506,7 @@ public void Touching(RapierCollider collider, List<RapierCollider> into)
 
 ---
 
-## 3. Test
+## 3. Tests
 
 `tests/RapierScenesTest.cs`:
 
@@ -919,15 +919,15 @@ namespace Fomoxa.Networking.Rapier.Tests
 }
 ```
 
-| Test | Kiểm |
+| Test | Checks |
 |---|---|
-| `ASceneFileBuildsTheStaticGeometryOfTheWorldOfItsScene` | Tệp scene dựng sàn của thế giới scene đó; bóng rơi dừng trên sàn |
-| `BodiesOfDifferentScenesLiveInDifferentWorlds` | Hai scene, hai thế giới: bóng của scene có sàn dừng trên sàn, bóng của scene không sàn rơi; `WorldsOf` trả thế giới của entity |
-| `UnloadingASceneDisposesItsWorldAndRemovingAnEntityRemovesItsBodies` | `RemoveBodies` xóa mọi body của entity; gỡ scene hủy thế giới |
-| `AColliderTouchingTheGroundLeadsBackToItsEntityUntilItsBodiesAreRemoved` | `Touching` của sàn trả collider của bóng; `EntityOf` trả entity; sau `RemoveBodies` không còn |
-| `AProxyIsKinematicAndKeepsItsStateWhenTheWorldIsLoaded` | Body đại diện kinematic, giữ trạng thái qua `Load`; `EndProxy` trả loại cũ; `HistoryOf` trả cùng lịch sử |
-| `BrokenGeometryAsksForANewExport` | Hình học hỏng ném `InvalidDataException` |
-| `AConsoleServerSimulatesTheSceneAndItsClientFollowsWithAProxy` | Server console và client console qua loopback, cả hai dùng `RapierScenes`: server mô phỏng, client có body đại diện theo tư thế của server |
-| `ATwoDimensionalSceneHasItsOwnWorldSteppedAfterTheThreeDimensionalOne` | Tệp chỉ có collider 2D chỉ tạo thế giới 2D; body 2D rơi lên sàn 2D; `WorldsOf`, `WorldsToStep` trả thế giới 2D |
-| `AWorldCreatedAfterTheSceneLoadedGetsTheLayersOfItsSceneFile` | Tệp không có collider 2D không tạo thế giới 2D; thế giới 2D tạo khi thêm body nhận ma trận layer 2D của tệp |
-| `AConsoleServerSimulatesATwoDimensionalSceneObjectFromTheSceneFile` | Scene object 2D đọc từ tệp có body và rơi trên server console |
+| `ASceneFileBuildsTheStaticGeometryOfTheWorldOfItsScene` | A scene file builds the floor of that scene's world; a falling ball stops on it |
+| `BodiesOfDifferentScenesLiveInDifferentWorlds` | Two scenes, two worlds: the ball of the scene with a floor stops on it, the ball of the scene without one falls; `WorldsOf` returns the entity's world |
+| `UnloadingASceneDisposesItsWorldAndRemovingAnEntityRemovesItsBodies` | `RemoveBodies` removes every body of the entity; unloading the scene disposes its world |
+| `AColliderTouchingTheGroundLeadsBackToItsEntityUntilItsBodiesAreRemoved` | `Touching` of the floor returns the ball's collider; `EntityOf` returns the entity, and nothing after `RemoveBodies` |
+| `AProxyIsKinematicAndKeepsItsStateWhenTheWorldIsLoaded` | A proxy body is kinematic and keeps its state through `Load`; `EndProxy` restores the old kind; `HistoryOf` returns the same history |
+| `BrokenGeometryAsksForANewExport` | Broken geometry throws `InvalidDataException` |
+| `AConsoleServerSimulatesTheSceneAndItsClientFollowsWithAProxy` | A console server and a console client over loopback, both with `RapierScenes`: the server simulates, the client has a proxy body at the server's pose |
+| `ATwoDimensionalSceneHasItsOwnWorldSteppedAfterTheThreeDimensionalOne` | A file with only 2D colliders creates only a 2D world; a 2D body falls onto the 2D floor; `WorldsOf` and `WorldsToStep` return the 2D world |
+| `AWorldCreatedAfterTheSceneLoadedGetsTheLayersOfItsSceneFile` | A file without 2D colliders creates no 2D world; the 2D world created when a body is added gets the file's 2D layer matrix |
+| `AConsoleServerSimulatesATwoDimensionalSceneObjectFromTheSceneFile` | A 2D scene object read from the file has a body and falls on the console server |

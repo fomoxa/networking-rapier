@@ -1,73 +1,73 @@
-# 08.13 — Tầng 1: crate Rapier 3D, `RapierWorld`
+# 08.13 — Tier 1: the Rapier 3D crate and `RapierWorld`
 
-> Bước con 08.13; kế hoạch ở mục 8b của `implementation/08-prediction-physics.md` trong repo `unity`. Listing là mã hiện tại của repo, nên có cả phần 2D (08.14) trong các tệp dùng chung và phần tập chạm (08.15) của `world3d.rs`, `RapierWorld`. Test: `dotnet test` 33/33 trên Linux (.NET 8) và Windows (.NET 9).
+> Sub-step 08.13; the plan is in the 8b section of `implementation/08-prediction-physics.md` in the `unity` repository. The listings show the current code of the repository, so they include the 2D part (08.14) of the shared files and the contact part (08.15) of `world3d.rs` and `RapierWorld`. Tests: `dotnet test` 33/33 on Linux (.NET 8) and Windows (.NET 9).
 
-| | Việc | Trạng thái |
+| | Work | Status |
 |---|---|:---:|
-| 1 | Crate `fomoxa-rapier`: `rapier3d =0.36.0` + `enhanced-determinism`, C ABI `fr_*` | ✅ |
-| 2 | Body có công thức dựng lại; `Load` theo body (Q163 (7) A) | ✅ |
-| 3 | Băm trạng thái chuẩn, kiểm tất định giữa nền tảng | ✅ |
-| 4 | `RapierWorld : IPhysicsWorld` trong assembly `Fomoxa.Networking.Rapier` | ✅ |
-| 5 | `Tools/build-rapier.sh` (Linux x64, Windows x64 qua `cargo.exe`); binary trong `Runtime/Plugins` | ✅ |
-| 6 | Test `dotnet`; đo chi phí chụp | ✅ |
+| 1 | Crate `fomoxa-rapier`: `rapier3d =0.36.0` with `enhanced-determinism`, C ABI `fr_*` | ✅ |
+| 2 | Bodies keep a recipe to rebuild them; per-body `Load` (Q163 (7) A) | ✅ |
+| 3 | Canonical state hash, cross-platform determinism check | ✅ |
+| 4 | `RapierWorld : IPhysicsWorld` in the assembly `Fomoxa.Networking.Rapier` | ✅ |
+| 5 | `Tools/build-rapier.sh` (Linux x64, Windows x64 through `cargo.exe`); libraries in `Runtime/Plugins` | ✅ |
+| 6 | dotnet tests; snapshot cost measurement | ✅ |
 
-**Luật:** P27 (Q163 (1) A, (2) C, (3) A, (7) A; Q164 (1) A; Q165 (1) A, (2) A).
+**Rules:** P27 (Q163 (1) A, (2) C, (3) A, (7) A; Q164 (1) A; Q165 (1) A, (2) A).
 
 ---
 
-## 1. Tổng quan
+## 1. Overview
 
 ### Crate
 
-- Một crate phục vụ cả 3D lẫn 2D. `rapier3d` và `rapier2d` cùng ghim `=0.36.0` với feature `enhanced-determinism` và `serde-serialize`. `crate-type` gồm `cdylib` cho Unity và server console, `rlib` cho kiểm thử Rust.
-- Bản release bật `lto`, `codegen-units = 1` và `panic = "abort"`, nên lỗi trong Rust dừng tiến trình thay vì tháo ngăn xếp qua ranh giới C. `strip = true` bỏ symbol: thư viện Linux giảm từ 5.9 MB còn 5.2 MB, phần còn lại là mã máy. Bản Windows để symbol ở tệp PDB riêng nên kích thước không đổi.
-- Thế giới (`World`) là một `Box` mà crate trả về cho C# dưới dạng con trỏ. C# giữ `IntPtr` và gọi `fr_world_destroy` khi `Dispose`. Hàm nào nhận con trỏ `null` thì trả giá trị rỗng (`false`, `0`) mà không đọc bộ nhớ.
-- Crate cấp id `u32` cho body, tăng dần từ 1 và không dùng lại; theo P27, `BodyHandle` là định danh ổn định do crate cấp và ánh xạ sang handle Rapier. Bảng `BTreeMap<u32, BodyEntry>` giữ handle Rapier, công thức dựng (`BodyRecipe`: loại, khối lượng, danh sách collider) và cờ chạy lại được. `user_data` của body là id. `user_data` của collider chứa id body ở 32 bit thấp và chỉ số collider trong body ở 32 bit kế tiếp; collider tĩnh có id body 0 và chỉ số theo thứ tự thêm.
-- `FrCollider` (`repr(C)`) mang shape, tư thế cục bộ, kích thước, con trỏ đỉnh và chỉ số tam giác, ma sát, độ nảy, hai cách kết hợp, layer và cờ trigger. Mã shape và mã cách kết hợp theo đúng thứ tự `ShapeKind`, `CombineRule` của Core, nên C# truyền thẳng giá trị enum. `CombineRule.Mean` ứng với `GeometricMean` của Rapier, không cần hook. Trigger thành sensor. Layer thành `InteractionGroups` với thành viên `1 << layer`, bộ lọc là mặt nạ của layer, chế độ `And`. Mọi collider bật `ActiveCollisionTypes` trừ `FIXED_FIXED` (08.15). Khi bao lồi suy biến hoặc lưới hỏng, việc dựng trả `None` và hàm FFI báo lỗi.
-- Với body động có `mass > 0`, crate tính khối lượng theo mật độ 1, rồi đặt mật độ mọi collider bằng `mass / khối lượng tính được`. Tổng khối lượng vì thế đúng bằng `mass`, còn tâm và quán tính vẫn theo hình.
-- `Step(seconds)` đặt `dt`, gọi `PhysicsWorld::step`, rồi xóa lực của mọi body, nên một lực chỉ tác dụng trong một bước (P27).
-- `raycast` và `overlap` duyệt mọi collider ở tư thế hiện tại của body cha thay vì dùng BVH của pha rộng. BVH chỉ cập nhật khi bước, nên dùng nó sẽ bỏ sót body vừa tạo hoặc vừa đặt tư thế. Tia trúng collider tĩnh trả body 0 (handle không hợp lệ); `overlap` chỉ trả body, theo thứ tự id.
+- One crate serves both 3D and 2D. `rapier3d` and `rapier2d` are both pinned to `=0.36.0` with the `enhanced-determinism` and `serde-serialize` features. `crate-type` has `cdylib` for Unity and console servers, and `rlib` for Rust tests.
+- The release profile sets `lto`, `codegen-units = 1` and `panic = "abort"`, so a Rust panic ends the process instead of unwinding across the C boundary. `strip = true` removes symbols: the Linux library went from 5.9 MB to 5.2 MB, and what remains is machine code. The Windows build keeps its symbols in a separate PDB file, so its size did not change.
+- A world (`World`) is a `Box` that the crate hands to C# as a pointer. C# keeps the `IntPtr` and calls `fr_world_destroy` on `Dispose`. Every function that receives a `null` pointer returns an empty value (`false`, `0`) without reading memory.
+- The crate gives each body a `u32` id, counting up from 1 and never reused; per P27, `BodyHandle` is a stable identifier issued by the crate and mapped to a Rapier handle. A `BTreeMap<u32, BodyEntry>` holds the Rapier handle, the recipe (`BodyRecipe`: kind, mass, collider list) and the rewindable flag. A body's `user_data` is its id. A collider's `user_data` holds the body id in the low 32 bits and the collider's index in the body in the next 32 bits; static colliders have body id 0 and an index in the order they were added.
+- `FrCollider` (`repr(C)`) carries the shape, the local pose, the sizes, pointers to the vertices and triangle indices, friction, restitution, the two combine rules, the layer and the trigger flag. Shape codes and combine rule codes follow the order of the Core's `ShapeKind` and `CombineRule`, so C# passes the enum values through. `CombineRule.Mean` maps to Rapier's `GeometricMean` without a hook. Triggers become sensors. A layer becomes `InteractionGroups` with membership `1 << layer`, the layer's mask as filter, and the `And` test mode. Every collider enables `ActiveCollisionTypes` except `FIXED_FIXED` (08.15). When a hull is degenerate or a mesh is broken, building returns `None` and the FFI function reports failure.
+- For a dynamic body with `mass > 0`, the crate computes the mass at density 1, then sets the density of every collider to `mass / computed mass`. The total mass equals `mass`, while the center and the inertia still follow the shape.
+- `Step(seconds)` sets `dt`, calls `PhysicsWorld::step` and then clears the forces of every body, so a force acts for one step (P27).
+- `raycast` and `overlap` go through every collider at the current pose of its parent body instead of using the broad-phase BVH. The BVH is only updated by a step, so it would miss a body that was just created or just moved. A ray that hits a static collider returns body 0 (an invalid handle); `overlap` returns bodies only, in id order.
 
-### Chụp và khôi phục (Q163 (7) A)
+### Snapshot and restore (Q163 (7) A)
 
-- `fr_world_snapshot` mã hóa `PhysicsWorld` bằng `bincode`, gồm mọi tập, pha hẹp và cặp tiếp xúc, kèm bảng `(id, chỉ số, thế hệ)` của body và số định dạng. `fr_world_snapshot_copy` chép kết quả ra mảng của C#. Bản chụp có định dạng khác hoặc giải mã lỗi bị từ chối.
-- `fr_world_load` đọc trạng thái và loại hiện tại của mọi body, rồi thay cả thế giới bằng bản chụp. Body có trong bản chụp nhưng đã bị xóa sau lúc chụp thì bị xóa lại. Body tạo sau lúc chụp được dựng lại từ công thức, theo thứ tự id, với trạng thái và loại đã đọc trước khi khôi phục. Body không chạy lại được (body đại diện, đặt bằng `fr_body_set_rewindable`) giữ trạng thái và loại hiện tại. Collider tĩnh nằm trong bản chụp.
-- Body dựng lại không có tiếp xúc, nên tick đầu tiên sau `Load` của body đó chỉ gần đúng (P27).
+- `fr_world_snapshot` encodes the `PhysicsWorld` with `bincode`, every set included, with the narrow phase and its contact pairs, together with the `(id, index, generation)` table of the bodies and a format number. `fr_world_snapshot_copy` copies the result into a C# array. A snapshot with another format, or one that fails to decode, is refused.
+- `fr_world_load` reads the current state and kind of every body, then replaces the whole world with the snapshot. A body that is in the snapshot but was removed after it is removed again. A body created after the snapshot is rebuilt from its recipe, in id order, with the state and kind read before the restore. A body that is not rewindable (a proxy body, set with `fr_body_set_rewindable`) keeps its current state and kind. Static colliders are part of the snapshot.
+- A rebuilt body has no contacts, so the first tick after `Load` is only approximate for that body (P27).
 
-### Băm trạng thái
+### State hash
 
-`fr_world_hash` tính FNV-1a 64 bit trên id, loại, vị trí, xoay, vận tốc và vận tốc góc của mọi body theo thứ tự id. Mỗi `f32` được chuẩn hóa trước (`-0` thành `0`, mọi NaN thành một NaN) rồi băm theo byte little-endian. Băm chỉ dùng cho test tất định và phép kiểm hai phía, không dùng lúc chạy game.
+`fr_world_hash` computes a 64-bit FNV-1a over the id, kind, position, rotation, velocity and angular velocity of every body, in id order. Each `f32` is canonicalized first (`-0` becomes `0`, every NaN becomes one NaN) and hashed as little-endian bytes. The hash is only for determinism tests and the two-sided check, not for gameplay.
 
 ### C#
 
-- `RapierNative` khai báo `DllImport("fomoxa_rapier")` không có đuôi tệp. Unity chọn tệp theo `.meta` của từng nền tảng, server console tìm tệp cạnh tệp chạy. Giá trị `bool` trả về có `MarshalAs(UnmanagedType.U1)`.
-- `RapierColliders` đổi `ColliderDesc` sang `FrCollider` và ghim mảng đỉnh, tam giác bằng `GCHandle` trong suốt lời gọi.
-- `RapierWorld : IPhysicsWorld, IDisposable` ném `ArgumentException` khi crate từ chối tạo body, hoặc khi đọc, ghi một body không có trong thế giới. `Save`, `Load` dùng `PhysicsSnapshot` riêng của backend, giữ một mảng byte tái dùng. Lớp có thêm `StateHash`, `SetLayerCollisions` (32 mặt nạ), `AddStatic`, `SetKind` và `IsDisposed`.
-- `IRapierBodies` (`internal`) là phần chung của thế giới 3D và 2D mà `RapierScenes` dùng cho body đại diện.
-- `RapierPackage.CheckCore` so `NetworkRuntime.Version` với phiên bản Core mà package được build cùng (P12). `RapierScenes` gọi hàm này khi được tạo.
+- `RapierNative` declares `DllImport("fomoxa_rapier")` without a file extension. Unity picks the file from each platform's `.meta`, and a console server looks for it next to the executable. Returned `bool` values carry `MarshalAs(UnmanagedType.U1)`.
+- `RapierColliders` converts `ColliderDesc` into `FrCollider` and pins the vertex and triangle arrays with `GCHandle` for the duration of the call.
+- `RapierWorld : IPhysicsWorld, IDisposable` throws `ArgumentException` when the crate refuses a body, and when a body that is not in the world is read or written. `Save` and `Load` use the backend's own `PhysicsSnapshot`, which keeps a reusable byte array. The class adds `StateHash`, `SetLayerCollisions` (32 masks), `AddStatic`, `SetKind` and `IsDisposed`.
+- `IRapierBodies` (`internal`) is the part shared by the 3D and 2D worlds that `RapierScenes` uses for proxy bodies.
+- `RapierPackage.CheckCore` compares `NetworkRuntime.Version` with the Core version the package was built against (P12). `RapierScenes` calls it when it is created.
 
-### Đo chi phí chụp
+### Snapshot cost
 
-Thế giới đo có một lưới 20 000 tam giác và 100 quả cầu, đã chạy 60 bước; mỗi thao tác lặp 50 lần:
+The measured world has a 20,000-triangle mesh and 100 spheres after 60 steps; each operation runs 50 times:
 
-| Nền tảng | `Save` | `Load` | `Step` |
+| Platform | `Save` | `Load` | `Step` |
 |---|---:|---:|---:|
 | Linux, .NET 8 | 1.09 ms | 2.04 ms | 0.22 ms |
 | Windows, .NET 9 | 2.7 ms | 4.9 ms | 0.64 ms |
 
-Với lịch sử 64 tick, một lần chạy lại dài cỡ một RTT gồm một `Load` và vài `Step`.
+With a 64-tick history, a replay about one RTT long takes one `Load` and a few `Step` calls.
 
-### Tất định giữa nền tảng
+### Cross-platform determinism
 
-`APileReachesTheSameStateOnEveryPlatform` thả 20 hộp xoay lên sàn, chạy 300 bước rồi so với băm cố định `0xF1860E86303F3AED`. Linux (glibc, .NET 8) và Windows (MSVC, .NET 9) cho cùng băm. 08.16 kiểm thêm giữa server console và client Unity chạy Mono.
+`APileReachesTheSameStateOnEveryPlatform` drops 20 rotated boxes onto a floor, runs 300 steps and compares the result with the fixed hash `0xF1860E86303F3AED`. Linux (glibc, .NET 8) and Windows (MSVC, .NET 9) give the same hash. 08.16 also checks a console server against a Unity client running Mono.
 
 ### Design
 
-Bản đầu của P27 và Q163 (2) ghi crate lấy `afjk/rapier-unity` làm mẫu, với bảng thế giới theo `world_id`, handle `index` + `generation` và ghi chú giấy phép MIT cho mã chép. Crate thực tế tự viết, không chép mã: thế giới là con trỏ do `RapierWorld`, `RapierWorld2D` giữ riêng và đặt về 0 khi hủy, còn body là id `u32` không dùng lại. Design đã sửa theo crate (P27 mục "Server console và 8b"; lý do ghi đè ở Q163 (2)).
+The first version of P27 and Q163 (2) said the crate would follow `afjk/rapier-unity`, with a world table keyed by `world_id`, `index` + `generation` handles and an MIT license notice for copied code. The crate is written from scratch and copies no code: a world is a pointer that `RapierWorld` and `RapierWorld2D` hold privately and reset to 0 on dispose, and a body is a `u32` id that is never reused. The design was corrected to match the crate (P27, section "Server console và 8b", console server and 8b; the reason is recorded in Q163 (2)).
 
 ---
 
-## 2. Mã
+## 2. Code
 
 `native/fomoxa-rapier/Cargo.toml`:
 
@@ -1064,7 +1064,7 @@ namespace Fomoxa.Networking.Rapier
 }
 ```
 
-`com.fomoxa.networking.rapier/Runtime/Rapier/RapierNative.cs` (3D và 2D):
+`com.fomoxa.networking.rapier/Runtime/Rapier/RapierNative.cs` (3D and 2D):
 
 ```csharp
 using System;
@@ -1818,9 +1818,9 @@ esac
 
 ---
 
-## 3. Test
+## 3. Tests
 
-`tests/Fomoxa.Networking.Rapier.Tests.csproj` (biên dịch Core, fixture registry và backend console của `../../unity/com.fomoxa.networking` cùng `Runtime/Rapier`; chép binary của hai nền tảng ra thư mục chạy):
+`tests/Fomoxa.Networking.Rapier.Tests.csproj` (compiles the Core, the fixture registry and the console backend of `../../unity/com.fomoxa.networking` together with `Runtime/Rapier`, and copies the libraries of both platforms to the output folder):
 
 ```xml
 <Project Sdk="Microsoft.NET.Sdk">
@@ -2277,20 +2277,20 @@ namespace Fomoxa.Networking.Rapier.Tests
 }
 ```
 
-| Test | Kiểm |
+| Test | Checks |
 |---|---|
-| `ADynamicBodyFallsOntoAStaticGroundAndHasTheGivenMass` | Cầu rơi xuống sàn tĩnh, dừng ở 0.5; khối lượng đúng `mass`; loại `Dynamic` |
-| `AForceLastsOneStepAndAnImpulseChangesTheVelocityAtOnce` | Xung lực đổi vận tốc ngay; lực tác dụng đúng một bước |
-| `LoadingASnapshotReplaysTheSameSteps` | Chụp, bước, khôi phục, bước lại cho cùng băm |
-| `LoadKeepsBodiesCreatedAfterTheSnapshotAndDoesNotRecreateRemovedOnes` | Body tạo sau lúc chụp giữ trạng thái; body xóa sau lúc chụp không sống lại |
-| `ABodyThatIsNotRewindableKeepsItsCurrentStateOnLoad` | Body không chạy lại được giữ trạng thái và loại hiện tại qua `Load` |
-| `TwoWorldsGivenTheSameCommandsReachTheSameState` | Hai thế giới cùng chuỗi lệnh cho cùng băm |
-| `APileReachesTheSameStateOnEveryPlatform` | Băm cố định giữa nền tảng |
-| `LayersThatDoNotCollideAndTriggersLetBodiesThrough` | Ma trận layer chặn va chạm; trigger không sinh lực |
-| `RaysAndOverlapsFindBodies` | `Raycast` thấy body vừa tạo chưa bước, trả điểm, pháp tuyến, khoảng cách của va chạm gần nhất; `Overlap` trả các body theo thứ tự id, không gồm collider tĩnh |
-| `HullsFallOntoTriangleMeshes` | Bao lồi rơi lên lưới tam giác tĩnh |
-| `ADisposedWorldHasNoBodiesAndRefusesNewOnes` | Thế giới đã hủy không có body, từ chối tạo |
-| `TheSnapshotOfASceneSizedWorldIsMeasured` | Đo `Save`, `Load`, `Step` (số liệu ở mục 1) |
-| `ABallRestingOnTheGroundTouchesTheStaticColliderOfItsIndex` | 08.15: tập chạm của bóng nằm yên và của collider tĩnh theo chỉ số |
-| `ASensorFindsDynamicAndKinematicBodiesButNotLayersItIgnores` | 08.15: sensor thấy body động, kinematic, collider thứ hai của một body; không thấy layer bị chặn |
-| `LoadBringsBackTheTouchingSetOfTheSavedTick` | 08.15: `Load` trả lại tập chạm của tick đã chụp |
+| `ADynamicBodyFallsOntoAStaticGroundAndHasTheGivenMass` | A sphere falls onto a static floor and stops at 0.5; its mass equals `mass`; its kind is `Dynamic` |
+| `AForceLastsOneStepAndAnImpulseChangesTheVelocityAtOnce` | An impulse changes the velocity at once; a force acts for exactly one step |
+| `LoadingASnapshotReplaysTheSameSteps` | Save, step, load and step again give the same hash |
+| `LoadKeepsBodiesCreatedAfterTheSnapshotAndDoesNotRecreateRemovedOnes` | A body created after the snapshot keeps its state; a body removed after the snapshot does not come back |
+| `ABodyThatIsNotRewindableKeepsItsCurrentStateOnLoad` | A body that is not rewindable keeps its current state and kind through `Load` |
+| `TwoWorldsGivenTheSameCommandsReachTheSameState` | Two worlds given the same commands reach the same hash |
+| `APileReachesTheSameStateOnEveryPlatform` | A fixed hash across platforms |
+| `LayersThatDoNotCollideAndTriggersLetBodiesThrough` | The layer matrix blocks collisions; triggers produce no force |
+| `RaysAndOverlapsFindBodies` | `Raycast` finds a body created before any step and returns the point, normal and distance of the closest hit; `Overlap` returns bodies in id order, without static colliders |
+| `HullsFallOntoTriangleMeshes` | A convex hull falls onto a static triangle mesh |
+| `ADisposedWorldHasNoBodiesAndRefusesNewOnes` | A disposed world has no bodies and refuses new ones |
+| `TheSnapshotOfASceneSizedWorldIsMeasured` | Measures `Save`, `Load` and `Step` (figures in section 1) |
+| `ABallRestingOnTheGroundTouchesTheStaticColliderOfItsIndex` | 08.15: the contact sets of a resting ball and of a static collider, by index |
+| `ASensorFindsDynamicAndKinematicBodiesButNotLayersItIgnores` | 08.15: a sensor finds dynamic and kinematic bodies and the second collider of a body, but not a blocked layer |
+| `LoadBringsBackTheTouchingSetOfTheSavedTick` | 08.15: `Load` brings back the contact set of the saved tick |

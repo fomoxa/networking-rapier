@@ -1,29 +1,29 @@
-# 08.14 — Tầng 1: thế giới Rapier 2D, `RapierWorld2D`
+# 08.14 — Tier 1: the Rapier 2D world and `RapierWorld2D`
 
-> Bước con 08.14; kế hoạch ở mục 8b của `implementation/08-prediction-physics.md` trong repo `unity`. Phần 2D dùng chung crate, `lib.rs`, `hash.rs`, `contact.rs` và `RapierNative.cs` với 08.13; listing của các tệp đó nằm ở [`08-13-tier1-rapier-3d.md`](08-13-tier1-rapier-3d.md). Listing trong tệp này là mã hiện tại, nên có cả phần tập chạm (08.15). Test: `dotnet test` 33/33 trên Linux (.NET 8) và Windows (.NET 9).
+> Sub-step 08.14; the plan is in the 8b section of `implementation/08-prediction-physics.md` in the `unity` repository. The 2D part shares the crate, `lib.rs`, `hash.rs`, `contact.rs` and `RapierNative.cs` with 08.13; the listings of those files are in [`08-13-tier1-rapier-3d.md`](08-13-tier1-rapier-3d.md). The listings in this file show the current code, so they include the contact part (08.15). Tests: `dotnet test` 33/33 on Linux (.NET 8) and Windows (.NET 9).
 
-| | Việc | Trạng thái |
+| | Work | Status |
 |---|---|:---:|
-| 1 | `world2d.rs`: `rapier2d =0.36.0`, C ABI `fr2_*` cùng cách làm với 3D | ✅ |
-| 2 | Shape 2D: hộp, tròn, viên nang, đa giác lồi, đường gấp khúc | ✅ |
+| 1 | `world2d.rs`: `rapier2d =0.36.0`, C ABI `fr2_*` built the same way as 3D | ✅ |
+| 2 | 2D shapes: box, circle, capsule, convex polygon, polyline | ✅ |
 | 3 | `RapierWorld2D : IPhysicsWorld2D` | ✅ |
-| 4 | Test `dotnet`, băm tất định 2D | ✅ |
+| 4 | dotnet tests, 2D determinism hash | ✅ |
 
-**Luật:** P27 (Q163 (4) A, (7) A; Q165 (1) A).
-
----
-
-## 1. Tổng quan
-
-- `world2d.rs` có cùng cấu trúc với `world3d.rs`, đổi sang kiểu 2D. `FrCollider2D` mang tư thế cục bộ gồm vị trí hai chiều và góc `f32`, và không có chỉ số tam giác. `FrBodyState2D` gồm vị trí, góc, vận tốc và vận tốc góc vô hướng; kết quả tia là `FrRayHit2D`. Phần còn lại giống 3D: body và công thức dựng, khối lượng theo mật độ, xóa lực sau bước, bản chụp `bincode` có số định dạng, `Load` theo body, băm, truy vấn duyệt mọi collider, `user_data` của collider và `ActiveCollisionTypes`.
-- Mã shape theo thứ tự `ShapeKind2D` của Core. `Box` dựng bằng `cuboid`, `Circle` bằng `ball`. `Capsule` dựng bằng `capsule_y` theo trục dọc; với viên nang ngang, bộ chuyển của `Fomoxa.Unity` xoay thêm một phần tư vòng. `ConvexPolygon` là `convex_hull` của các điểm, và tập điểm suy biến bị từ chối. `Polyline` nối các điểm liên tiếp và chỉ dùng cho body tĩnh; với `PolygonCollider2D` tĩnh, bộ chuyển khép đường bằng cách lặp lại điểm đầu.
-- Góc 2D tính bằng radian quanh trục Z, cùng chiều với Unity.
-- `RapierWorld2D` báo lỗi giống `RapierWorld` khi crate từ chối, khi thế giới đã hủy và khi bản chụp thuộc backend khác, nhưng dùng `BodyState2D`, `RayHit2D` và lực, xung lực kiểu `Vector2`. Lớp cũng có `StateHash`, `SetLayerCollisions`, `AddStatic`, `SetKind`, `IsDisposed` và `Touching` (08.15).
-- Băm cố định của chồng vật 2D là `0x8DC0037A8661A2C5`, giống nhau trên Linux và Windows.
+**Rules:** P27 (Q163 (4) A, (7) A; Q165 (1) A).
 
 ---
 
-## 2. Mã
+## 1. Overview
+
+- `world2d.rs` has the same structure as `world3d.rs`, with 2D types. `FrCollider2D` carries a local pose made of a 2D position and an `f32` angle, and has no triangle indices. `FrBodyState2D` holds the position, the angle, the velocity and a scalar angular velocity; a ray result is an `FrRayHit2D`. Everything else matches 3D: bodies and their recipes, mass through density, clearing forces after a step, `bincode` snapshots with a format number, per-body `Load`, the hash, queries that go through every collider, collider `user_data` and `ActiveCollisionTypes`.
+- Shape codes follow the order of the Core's `ShapeKind2D`. `Box` is built with `cuboid` and `Circle` with `ball`. `Capsule` is built with `capsule_y` along the vertical axis; for a horizontal capsule, the `Fomoxa.Unity` converter adds a quarter turn. `ConvexPolygon` is the `convex_hull` of the points, and a degenerate point set is refused. `Polyline` joins consecutive points and is only used on static bodies; for a static `PolygonCollider2D`, the converter closes the path by repeating the first point.
+- 2D angles are radians around the Z axis, in the same direction as Unity.
+- `RapierWorld2D` reports errors like `RapierWorld` does when the crate refuses something, when the world is disposed and when a snapshot belongs to another backend, but uses `BodyState2D`, `RayHit2D` and `Vector2` forces and impulses. It also has `StateHash`, `SetLayerCollisions`, `AddStatic`, `SetKind`, `IsDisposed` and `Touching` (08.15).
+- The fixed hash of the 2D pile is `0x8DC0037A8661A2C5`, the same on Linux and Windows.
+
+---
+
+## 2. Code
 
 `native/fomoxa-rapier/src/world2d.rs`:
 
@@ -1194,7 +1194,7 @@ namespace Fomoxa.Networking.Rapier
 
 ---
 
-## 3. Test
+## 3. Tests
 
 `tests/RapierWorld2DTest.cs`:
 
@@ -1419,13 +1419,13 @@ namespace Fomoxa.Networking.Rapier.Tests
 }
 ```
 
-| Test | Kiểm |
+| Test | Checks |
 |---|---|
-| `ACircleFallsOntoAPolylineAndHasTheGivenMass` | Tròn rơi xuống đường gấp khúc tĩnh; khối lượng đúng |
-| `ABodyOfConvexPiecesLandsOnABox` | Body nhiều đa giác lồi rơi lên hộp, nằm yên không nghiêng; khối lượng đúng |
-| `AForceLastsOneStepAndAnImpulseAndASpinChangeTheBodyAtOnce` | Lực một bước; xung lực và vận tốc góc đổi body ngay; góc sau 15 tick |
-| `LoadingASnapshotReplaysTheSameStepsAndKeepsBodiesCreatedSince` | Chạy lại cho cùng băm; body xóa sau lúc chụp không sống lại; body tạo sau lúc chụp giữ trạng thái |
-| `APileReachesTheSameStateOnEveryPlatform` | Băm cố định giữa nền tảng |
-| `LayersAndTriggersLetBodiesThroughAndQueriesFindBodies` | Ma trận layer, trigger, `Raycast`, `Overlap` |
-| `ADisposedWorldHasNoBodiesAndRefusesNewOnes` | Thế giới đã hủy |
-| `TouchingSetsFollowContactsSensorsKinematicBodiesAndLoad` | 08.15: tập chạm của tròn nằm trên đường gấp khúc, body kinematic trong sensor tĩnh, `Load` trả lại tập chạm |
+| `ACircleFallsOntoAPolylineAndHasTheGivenMass` | A circle falls onto a static polyline; its mass is right |
+| `ABodyOfConvexPiecesLandsOnABox` | A body of several convex polygons lands on a box and rests level; its mass is right |
+| `AForceLastsOneStepAndAnImpulseAndASpinChangeTheBodyAtOnce` | A force lasts one step; an impulse and an angular velocity change the body at once; the angle after 15 ticks |
+| `LoadingASnapshotReplaysTheSameStepsAndKeepsBodiesCreatedSince` | A replay gives the same hash; a body removed after the snapshot does not come back; a body created after it keeps its state |
+| `APileReachesTheSameStateOnEveryPlatform` | A fixed hash across platforms |
+| `LayersAndTriggersLetBodiesThroughAndQueriesFindBodies` | Layer matrix, triggers, `Raycast`, `Overlap` |
+| `ADisposedWorldHasNoBodiesAndRefusesNewOnes` | A disposed world |
+| `TouchingSetsFollowContactsSensorsKinematicBodiesAndLoad` | 08.15: the contact set of a circle resting on a polyline and of a kinematic body inside a static sensor; `Load` brings the contact set back |

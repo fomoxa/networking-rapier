@@ -1,56 +1,56 @@
-# 08.16 — Kiểm hai phía: server console Rapier với client Unity Rapier
+# 08.16 — Two-sided check: a Rapier console server with a Rapier Unity client
 
-> Bước con 08.16; kế hoạch ở mục "Kế hoạch đề xuất của 08.16: kiểm hai phía" của `implementation/08-prediction-physics.md` trong repo `unity`, và kết quả cũng ghi ở mục 08.16 của tệp đó. Đây là lần đầu server console chạy với client Unity; 10.9 mới kiểm server console với client console.
+> Sub-step 08.16; the plan is in the section "Kế hoạch đề xuất của 08.16: kiểm hai phía" (proposed plan of 08.16: two-sided check) of `implementation/08-prediction-physics.md` in the `unity` repository, and the results are also recorded in its 08.16 section. This is the first time a console server runs with a Unity client; 10.9 only checked a console server with a console client.
 
-| | Việc | Trạng thái |
+| | Work | Status |
 |---|---|:---:|
-| 1 | Tệp kịch bản dùng chung: tệp scene, mô tả bóng, xung lực, codec input và reconcile, bản ghi | ✅ |
-| 2 | Server console `checks/two-sided/` | ✅ |
-| 3 | Client Unity: test `TwoSidedClientCheck` | ✅ |
-| 4 | `Tools/two-sided-check.sh` (`linux`, `windows`), so hai bản ghi | ✅ |
-| 5 | Chạy trên hai tổ hợp: server Linux và Windows, client Unity Windows | ✅ |
+| 1 | Shared scenario file: scene file, ball description, impulses, input and reconcile codecs, record | ✅ |
+| 2 | Console server `checks/two-sided/` | ✅ |
+| 3 | Unity client: the `TwoSidedClientCheck` test | ✅ |
+| 4 | `Tools/two-sided-check.sh` (`linux`, `windows`), comparison of the two records | ✅ |
+| 5 | Runs on two combinations: Linux and Windows servers, Windows Unity client | ✅ |
 
-**Luật:** P27 (Q163 (1) A, (3) A, (5) A).
+**Rules:** P27 (Q163 (1) A, (3) A, (5) A).
 
 ---
 
-## 1. Tổng quan
+## 1. Overview
 
-### Kịch bản
+### Scenario
 
-- Bóng chạy trong một hộp kín không trọng lực gồm sàn, trần, bốn tường (hộp) và một kim tự tháp lưới tam giác ở giữa. Server sinh tệp scene bằng code (`TwoSidedScenario.Arena`) và ghi ra đĩa; client đọc đúng các byte đó qua `RapierPhysics.SceneFileOf`. Server nạp hình học vào thế giới `sceneId` 0, client nạp vào thế giới của scene đang mở.
-- Khi client kết nối, server spawn ba bóng do client sở hữu, theo một thứ tự cố định. Mỗi bóng là một cầu bán kính 0.5, khối lượng 1, ma sát 0.5, độ nảy 0.5, cách kết hợp `Average`. Client Unity dựng bóng từ prefab có `SphereCollider`, `PhysicsMaterial` và `Rigidbody` tương ứng, và bộ chuyển của 08.10 cho ra đúng mô tả mà server dùng.
-- Mỗi tick, `Apply` cộng vào bóng một xung lực tính từ tick và chỉ số bóng (thứ tự spawn). Xung lực được tính bằng phép trộn bit số nguyên rồi chia cho 1024, không dùng hàm lượng giác, để CoreCLR và Mono cho cùng bit. Nội dung input không ảnh hưởng xung lực, nên input đến trễ, khi server phải lặp input cũ, không gây lệch.
-- Reconcile chạy mỗi tick (`ReconcileInterval` 1) trên 13 số thực của body: vị trí, xoay, vận tốc, vận tốc góc. Hai phía phải khớp từng bit, và mỗi lần lệch được đếm.
-- Mỗi phía ghi `tick → StateHash` của thế giới trong `Capture`, tức sau bước của tick đó; client ghi đè khi chạy lại. Server dừng khi client ngắt kết nối. Client chạy 25 giây theo đồng hồ thật, `Thread.Sleep(1)` giữa các khung.
+- The balls move in a closed box without gravity, made of a floor, a ceiling, four walls (boxes) and a triangle-mesh pyramid in the middle. The server builds the scene file in code (`TwoSidedScenario.Arena`) and writes it to disk; the client reads the same bytes through `RapierPhysics.SceneFileOf`. The server loads the geometry into the world of `sceneId` 0, and the client into the world of the open scene.
+- When the client connects, the server spawns three balls owned by the client, in a fixed order. Each ball is a sphere with radius 0.5, mass 1, friction 0.5, restitution 0.5 and the `Average` combine rule. The Unity client builds the balls from a prefab with a matching `SphereCollider`, `PhysicsMaterial` and `Rigidbody`, and the 08.10 converter produces the same description the server uses.
+- On every tick, `Apply` adds an impulse to the ball computed from the tick and the ball's index (its spawn order). The impulse comes from integer bit mixing divided by 1024, with no trigonometric functions, so that CoreCLR and Mono produce the same bits. The input content does not affect the impulse, so a late input, which makes the server repeat the previous one, causes no divergence.
+- Reconcile runs every tick (`ReconcileInterval` 1) on 13 floats of the body: position, rotation, velocity and angular velocity. Both sides must match bit for bit, and every mismatch is counted.
+- Each side records `tick → StateHash` of the world in `Capture`, that is, after the step of that tick; the client overwrites entries when it replays. The server stops when the client disconnects. The client runs for 25 seconds of wall-clock time, with `Thread.Sleep(1)` between frames.
 
-### Tiêu chí và kết quả
+### Criteria and results
 
-Phép kiểm đạt khi mọi tick có ở cả hai bản ghi đều cho cùng băm, số tick chung ít nhất 1000, và không có reconcile nào lệch. Client chạy trên Unity 6000.5.7f1 Editor (Mono, Windows, batchmode).
+The check passes when every tick present in both records has the same hash, there are at least 1000 common ticks, and no reconcile mismatches. The client runs in the Unity 6000.5.7f1 Editor (Mono, Windows, batch mode).
 
-| Server | Tick chung | Băm lệch | Reconcile lệch | Kết quả |
+| Server | Common ticks | Hash mismatches | Reconcile mismatches | Result |
 |---|---:|---:|---:|:---:|
 | Linux, .NET 8.0.30 | 1484 | 0 | 0 | PASS |
 | Windows, .NET 9.0.20 | 1483 | 0 | 0 | PASS |
 
-Server đếm tiếp xúc qua `Touching` của từng bóng. Trong một lần chạy, bóng chạm tường ở 110 tick, chạm lưới ở 21 tick, và có 6 lần bóng chạm bóng (đếm từ cả hai phía của mỗi cặp).
+The server counts contacts through each ball's `Touching`. In one run, balls touched a wall in 110 ticks and the mesh in 21 ticks, and touched each other 6 times (counted from both sides of each pair).
 
-### Phát hiện
+### Findings
 
-- Client chỉ bắt đầu dự đoán sau trạng thái reconcile đầu tiên. Trước đó nó gửi input mà không áp dụng; khi reconcile, nó khôi phục trạng thái của server ở tick t rồi chạy lại từ t + 1. Vì vậy tick áp dụng đầu tiên ở client luôn sau server. Bản thử đầu bắt đầu xung lực từ "tick áp dụng đầu + 60" và lệch đúng một tick ở tick bắt đầu, sinh ba reconcile lệch. Kịch bản hiện tại không phụ thuộc tick áp dụng đầu.
-- `RapierPhysics` từng gắn body theo thứ tự duyệt `HashSet`; nay gắn theo `ObjectId` (08.15).
-- Unity chạy cả test `[Explicit]` khi lọc theo `-assemblyNames`, nên test client tự bỏ qua khi thiếu biến môi trường do script đặt.
+- The client only starts predicting after the first reconcile state. Before that it sends inputs without applying them; when it reconciles, it restores the server state at tick t and replays from t + 1. The client's first applied tick is therefore always later than the server's. The first prototype started the impulses at "first applied tick + 60" and was off by exactly one tick at the start, which gave three reconcile mismatches. The current scenario does not depend on the first applied tick.
+- `RapierPhysics` used to create bodies in the iteration order of a `HashSet`; it now uses `ObjectId` order (08.15).
+- Unity also runs `[Explicit]` tests when filtering with `-assemblyNames`, so the client test skips itself when the environment variables set by the script are missing.
 
-### Khác kế hoạch
+### Differences from the plan
 
-- Không có `StartTick` đồng bộ qua state. Xung lực áp dụng từ tick đầu, và trạng thái trước khi client dự đoán đến từ reconcile của server (xem Phát hiện). Dùng state đồng bộ sẽ cần một model có kênh tin cậy trong registry, điều phép kiểm không cần.
-- Script dùng địa chỉ IP của WSL khi server chạy trên Linux và `127.0.0.1` khi server chạy trên Windows. Tham số cho Unity truyền qua `WSLENV`.
+- There is no `StartTick` synchronized through state. The impulses apply from the first tick, and the state before the client starts predicting comes from the server's reconcile (see Findings). Synchronized state would need a model on a reliable channel in the registry, which the check does not need.
+- The script uses the WSL IP address when the server runs on Linux, and `127.0.0.1` when it runs on Windows. Parameters reach Unity through `WSLENV`.
 
 ---
 
-## 2. Mã
+## 2. Code
 
-`com.fomoxa.networking.rapier/Tests/Unity/TwoSided/TwoSidedScenario.cs` (biên dịch trong assembly test Unity và trong server console):
+`com.fomoxa.networking.rapier/Tests/Unity/TwoSided/TwoSidedScenario.cs` (compiled into the Unity test assembly and into the console server):
 
 ```csharp
 using System;

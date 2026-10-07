@@ -1,50 +1,50 @@
 # networking-rapier
 
-Repo này chứa backend physics Rapier của `com.fomoxa.networking`. Package Unity `com.fomoxa.networking.rapier` gọi crate FFI `fomoxa-rapier`, crate này dựng trên `rapier3d` và `rapier2d` 0.36.0 với feature `enhanced-determinism`. Binary native cho Windows x64 và Linux x64 được commit cùng mã nguồn. Repo cũng có test và phép kiểm hai phía giữa server console và client Unity.
+This repository holds the Rapier physics backend of `com.fomoxa.networking`. The Unity package `com.fomoxa.networking.rapier` calls the FFI crate `fomoxa-rapier`, which is built on `rapier3d` and `rapier2d` 0.36.0 with the `enhanced-determinism` feature. Native libraries for Windows x64 and Linux x64 are committed together with the source. The repository also has the tests and a two-sided check between a console server and a Unity client.
 
-Backend là tùy chọn nên nằm ở repo riêng (Q163 (2) C). Core không biết Rapier, và một bản sửa của Rapier chỉ cần phát hành lại package này. Thiết kế nằm ở repo `unity` (`design/principles.md` P27, `design/open-questions.md` Q163 – Q166). Bản thi công ở [`implementation/`](implementation/README.md), hướng dẫn dùng ở [README của package](com.fomoxa.networking.rapier/README.md).
+The backend is optional, so it lives in its own repository (Q163 (2) C). The Core does not know about Rapier, and a Rapier fix only needs a new release of this package. The design is in the `unity` repository (`design/principles.md` P27, `design/open-questions.md` Q163 – Q166). The implementation notes are in [`implementation/`](implementation/README.md), and usage is described in the [package README](com.fomoxa.networking.rapier/README.md).
 
 ```
-game Unity / server console
+Unity game / console server
     |
-com.fomoxa.networking.rapier     RapierPhysics (Unity), RapierScenes, RapierWorld, RapierWorld2D    ← repo này
+com.fomoxa.networking.rapier     RapierPhysics (Unity), RapierScenes, RapierWorld, RapierWorld2D        ← this repository
     |
-fomoxa-rapier (Rust, cdylib)     C ABI fr_*, fr2_*: thế giới, body, chụp, khôi phục, tập chạm, băm  ← repo này
+fomoxa-rapier (Rust, cdylib)     C ABI fr_*, fr2_*: worlds, bodies, snapshots, restore, contacts, hash  ← this repository
     |
 rapier3d, rapier2d =0.36.0
 ```
 
-## Cấu trúc
+## Layout
 
 ```
-native/fomoxa-rapier/            crate FFI
-com.fomoxa.networking.rapier/    package Unity (Runtime/Rapier không tham chiếu UnityEngine; Runtime/Unity; Runtime/Plugins; Tests/Unity)
-tests/                           test dotnet của phần tầng 1
-test-project/                    project Unity chạy test của package
-checks/two-sided/                server console của phép kiểm hai phía
-Tools/                           build binary, test Unity trên Windows, kiểm hai phía, ghi chú bên thứ ba
-implementation/                  bản thi công các bước 08.13 – 08.16
+native/fomoxa-rapier/            FFI crate
+com.fomoxa.networking.rapier/    Unity package (Runtime/Rapier has no UnityEngine reference; Runtime/Unity; Runtime/Plugins; Tests/Unity)
+tests/                           dotnet tests of the tier 1 part
+test-project/                    Unity project that runs the package tests
+checks/two-sided/                console server of the two-sided check
+Tools/                           library builds, Unity tests on Windows, two-sided check, third-party notices
+implementation/                  implementation notes for steps 08.13 – 08.16
 ```
 
-## Phụ thuộc lúc phát triển
+## Development dependencies
 
-- Repo `unity` clone cạnh repo này (`../unity`). Test `dotnet`, project Unity và server kiểm hai phía lấy Core từ `../unity/com.fomoxa.networking`. Repo chưa có CI vì cách CI lấy Core chưa định.
-- Rust (stable) cho build Linux; `cargo.exe` của Windows cho build Windows từ WSL.
-- .NET SDK 8 trên Linux; .NET SDK 9 trên Windows cho server kiểm hai phía.
-- Unity 6000.5.7f1 trên Windows cho test Unity và phép kiểm hai phía.
+- The `unity` repository cloned next to this one (`../unity`). The dotnet tests, the Unity project and the two-sided server take the Core from `../unity/com.fomoxa.networking`. There is no CI yet, because how CI gets the Core has not been decided.
+- Rust (stable) for the Linux build, and the Windows `cargo.exe` for the Windows build from WSL.
+- .NET SDK 8 on Linux, and .NET SDK 9 on Windows for the two-sided server.
+- Unity 6000.5.7f1 on Windows for the Unity tests and the two-sided check.
 
-## Lệnh
+## Commands
 
-| Việc | Lệnh |
+| Task | Command |
 |---|---|
-| Build binary | `Tools/build-rapier.sh linux`, `Tools/build-rapier.sh windows`, `Tools/build-rapier.sh all` |
-| Test `dotnet` | `dotnet test tests/Fomoxa.Networking.Rapier.Tests.csproj` |
-| Test Unity EditMode | `Tools/unity-windows-check.sh` |
-| Kiểm hai phía | `Tools/two-sided-check.sh linux`, `Tools/two-sided-check.sh windows` |
-| Ghi chú bên thứ ba | `python3 Tools/third-party-notices.py` |
+| Build the libraries | `Tools/build-rapier.sh linux`, `Tools/build-rapier.sh windows`, `Tools/build-rapier.sh all` |
+| dotnet tests | `dotnet test tests/Fomoxa.Networking.Rapier.Tests.csproj` |
+| Unity EditMode tests | `Tools/unity-windows-check.sh` |
+| Two-sided check | `Tools/two-sided-check.sh linux`, `Tools/two-sided-check.sh windows` |
+| Third-party notices | `python3 Tools/third-party-notices.py` |
 
-Binary native được build bằng tay rồi commit; không có CI build hay phát hành binary. Sau khi đổi crate, build lại cả hai nền tảng rồi chạy lại test trên hai nền tảng và phép kiểm hai phía.
+The native libraries are built by hand and committed; there is no CI that builds or releases them. After changing the crate, rebuild both platforms, then run the tests on both platforms and the two-sided check.
 
-## Giấy phép
+## License
 
-Apache-2.0 ([`LICENSE.md`](LICENSE.md)). Rapier và các crate được link tĩnh vào binary: [`Third Party Notices.md`](com.fomoxa.networking.rapier/Third%20Party%20Notices.md).
+Apache-2.0 ([`LICENSE.md`](LICENSE.md)). Rapier and the other crates statically linked into the libraries: [`Third Party Notices.md`](com.fomoxa.networking.rapier/Third%20Party%20Notices.md).

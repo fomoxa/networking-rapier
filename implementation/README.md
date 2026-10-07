@@ -1,52 +1,52 @@
-# Thi công backend Rapier (8b)
+# Rapier backend implementation (8b)
 
-Thư mục này là bản thi công của các bước con 8b làm ở repo `networking-rapier`. Thiết kế nằm ở repo `unity`, trong `design/principles.md` P27 (mục "Server console và 8b") và `design/open-questions.md` Q163 – Q166. Kế hoạch và hợp đồng của từng bước con nằm ở mục 8b của `implementation/08-prediction-physics.md` trong repo `unity`.
+This folder holds the implementation notes of the 8b sub-steps done in the `networking-rapier` repository. The design is in the `unity` repository, in `design/principles.md` P27 (section "Server console và 8b", console server and 8b) and `design/open-questions.md` Q163 – Q166. The plan and the contract of each sub-step are in the 8b section of `implementation/08-prediction-physics.md` in the `unity` repository.
 
-Thứ tự thẩm quyền như repo `unity`: `design/` của repo `unity` → kế hoạch 8b ở `implementation/` của repo `unity` → tệp trong thư mục này → code.
+The order of authority is the same as in the `unity` repository: `design/` of the `unity` repository, then the 8b plan in its `implementation/`, then the files in this folder, then the code.
 
-## Trạng thái
+## Status
 
-| Bước | Việc | Tệp | Trạng thái |
+| Step | Work | File | Status |
 |---|---|---|:---:|
-| 08.13 | Crate 3D, thế giới Rapier tầng 1 (`IPhysicsWorld`), `Load` theo body, băm trạng thái, đo chi phí chụp | [`08-13-tier1-rapier-3d.md`](08-13-tier1-rapier-3d.md) | ✅ |
+| 08.13 | 3D crate, tier 1 Rapier world (`IPhysicsWorld`), per-body `Load`, state hash, snapshot cost | [`08-13-tier1-rapier-3d.md`](08-13-tier1-rapier-3d.md) | ✅ |
 | 08.14 | 2D (`rapier2d`, `IPhysicsWorld2D`) | [`08-14-tier1-rapier-2d.md`](08-14-tier1-rapier-2d.md) | ✅ |
-| 08.15 | `RapierScenes` (`IPhysicsScenes`), tập chạm của thế giới | [`08-15-tier1-rapier-scenes.md`](08-15-tier1-rapier-scenes.md) | ✅ |
-| 08.15 | Phần Unity: `RapierPhysics`, nguồn tập chạm, project Unity kiểm | [`08-15-tier2-rapier-unity.md`](08-15-tier2-rapier-unity.md) | ✅ |
-| 08.16 | Kiểm hai phía: server console Rapier với client Unity Rapier qua UDP | [`08-16-two-sided-check.md`](08-16-two-sided-check.md) | ✅ |
-| — | CI | — | chưa có: nguồn lấy Core cho CI chưa định |
+| 08.15 | `RapierScenes` (`IPhysicsScenes`), contact sets of a world | [`08-15-tier1-rapier-scenes.md`](08-15-tier1-rapier-scenes.md) | ✅ |
+| 08.15 | Unity part: `RapierPhysics`, contact source, Unity test project | [`08-15-tier2-rapier-unity.md`](08-15-tier2-rapier-unity.md) | ✅ |
+| 08.16 | Two-sided check: Rapier console server with a Rapier Unity client over UDP | [`08-16-two-sided-check.md`](08-16-two-sided-check.md) | ✅ |
+| — | CI | — | not yet: how CI gets the Core is not decided |
 
-Phần dùng chung của mọi backend (interface physics công khai, `NetworkPhysics`, collider của body, bộ chuyển collider, tệp scene, physics của backend console, điểm cắm nguồn tập chạm) làm ở repo `unity`, bước 08.8 – 08.12 và phần `Fomoxa.Unity` của 08.15.
+The part shared by every backend (the public physics interface, `NetworkPhysics`, body colliders, the collider converter, scene files, console backend physics, the contact source plug-in point) is done in the `unity` repository, in steps 08.8 – 08.12 and the `Fomoxa.Unity` part of 08.15.
 
-## Cấu trúc
+## Layout
 
 ```
-native/fomoxa-rapier/            crate FFI (rapier3d, rapier2d =0.36.0, enhanced-determinism)
-com.fomoxa.networking.rapier/    package Unity
-  Runtime/Rapier/                assembly Fomoxa.Networking.Rapier, không tham chiếu UnityEngine
+native/fomoxa-rapier/            FFI crate (rapier3d, rapier2d =0.36.0, enhanced-determinism)
+com.fomoxa.networking.rapier/    Unity package
+  Runtime/Rapier/                assembly Fomoxa.Networking.Rapier, no UnityEngine reference
   Runtime/Unity/                 assembly Fomoxa.Unity.Rapier
-  Runtime/Plugins/               binary native đã build (Linux x64, Windows x64)
-  Tests/Unity/                   test Unity; TwoSided/ là phép kiểm hai phía
-tests/                           test dotnet của phần tầng 1
-test-project/                    project Unity chạy test của package
-checks/two-sided/                server console của phép kiểm hai phía
-Tools/                           build binary, chạy test Unity trên Windows, kiểm hai phía, ghi chú bên thứ ba
-implementation/                  thư mục này
+  Runtime/Plugins/               prebuilt native libraries (Linux x64, Windows x64)
+  Tests/Unity/                   Unity tests; TwoSided/ is the two-sided check
+tests/                           dotnet tests of the tier 1 part
+test-project/                    Unity project that runs the package tests
+checks/two-sided/                console server of the two-sided check
+Tools/                           library builds, Unity tests on Windows, two-sided check, third-party notices
+implementation/                  this folder
 ```
 
 ## Core
 
-Test `dotnet`, project Unity và server kiểm hai phía lấy Core từ `../unity/com.fomoxa.networking`, tức repo `unity` clone cùng cấp với repo này. Cách CI lấy Core chưa định; các phương án là bản chép có tệp `SOURCE`, submodule ghim commit, hoặc tag. Kế hoạch 8b của repo `unity` ghi submodule ghim commit, còn P12 ghi CI lấy Core theo tag đã ghim. Khi chọn xong, các đường dẫn `../../unity`, `../../../unity` trong `tests/*.csproj`, `checks/two-sided/*.csproj`, `test-project/Packages/manifest.json` và `Tools/*.sh` đổi theo.
+The dotnet tests, the Unity project and the two-sided server take the Core from `../unity/com.fomoxa.networking`, that is, the `unity` repository cloned next to this one. How CI gets the Core is not decided; the options are a copy with a `SOURCE` file, a submodule pinned to a commit, or a tag. The 8b plan in the `unity` repository records a pinned submodule, and P12 records that CI takes the Core at a pinned tag. Once one is chosen, the paths `../../unity` and `../../../unity` in `tests/*.csproj`, `checks/two-sided/*.csproj`, `test-project/Packages/manifest.json` and `Tools/*.sh` change accordingly.
 
-## Lệnh
+## Commands
 
-| Việc | Lệnh |
+| Task | Command |
 |---|---|
-| Build binary Linux, Windows | `Tools/build-rapier.sh linux`, `Tools/build-rapier.sh windows`, `Tools/build-rapier.sh all` |
-| Test `dotnet` (Linux) | `dotnet test tests/Fomoxa.Networking.Rapier.Tests.csproj` |
-| Test Unity EditMode (Windows, từ WSL) | `Tools/unity-windows-check.sh` |
-| Kiểm hai phía | `Tools/two-sided-check.sh linux`, `Tools/two-sided-check.sh windows` |
-| Ghi chú bên thứ ba | `python3 Tools/third-party-notices.py` |
+| Build the Linux and Windows libraries | `Tools/build-rapier.sh linux`, `Tools/build-rapier.sh windows`, `Tools/build-rapier.sh all` |
+| dotnet tests (Linux) | `dotnet test tests/Fomoxa.Networking.Rapier.Tests.csproj` |
+| Unity EditMode tests (Windows, from WSL) | `Tools/unity-windows-check.sh` |
+| Two-sided check | `Tools/two-sided-check.sh linux`, `Tools/two-sided-check.sh windows` |
+| Third-party notices | `python3 Tools/third-party-notices.py` |
 
-Môi trường WSL cần `LANG=C.UTF-8 LC_ALL=C.UTF-8 DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1` cho `dotnet`. Build Windows dùng `cargo.exe` của Windows; test `dotnet` trên Windows chạy bằng `dotnet.exe` với `TargetFramework` đổi sang `net9.0` trong bản chép (máy chỉ có SDK 9).
+Under WSL, `dotnet` needs `LANG=C.UTF-8 LC_ALL=C.UTF-8 DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1`. The Windows build uses the Windows `cargo.exe`. The dotnet tests on Windows run with `dotnet.exe`, with `TargetFramework` changed to `net9.0` in the copied project, because the machine only has SDK 9.
 
-Binary native được build bằng tay rồi commit, theo luật của fomoxac; không có CI build hay phát hành binary (Q163 (2) C). Sau khi đổi crate, build lại cả hai nền tảng, chạy lại test trên hai nền tảng và phép kiểm hai phía. Nếu cây phụ thuộc đổi, chạy lại `Tools/third-party-notices.py`.
+The native libraries are built by hand and committed, following the fomoxac rule; there is no CI that builds or releases them (Q163 (2) C). After changing the crate, rebuild both platforms, then run the tests on both platforms and the two-sided check. If the dependency tree changed, run `Tools/third-party-notices.py` again.
