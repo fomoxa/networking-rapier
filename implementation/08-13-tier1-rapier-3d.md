@@ -19,7 +19,7 @@
 
 ### Crate
 
-- Một crate cho 3D và 2D (`rapier3d`, `rapier2d` cùng `=0.36.0`, feature `enhanced-determinism`, `serde-serialize`), `crate-type` `cdylib` cho Unity và server console, `rlib` cho kiểm thử Rust. Bản release bật `lto`, `codegen-units = 1`, `panic = "abort"`: lỗi trong Rust dừng tiến trình, không tháo ngăn xếp qua ranh giới C.
+- Một crate cho 3D và 2D (`rapier3d`, `rapier2d` cùng `=0.36.0`, feature `enhanced-determinism`, `serde-serialize`), `crate-type` `cdylib` cho Unity và server console, `rlib` cho kiểm thử Rust. Bản release bật `lto`, `codegen-units = 1`, `panic = "abort"` (lỗi trong Rust dừng tiến trình, không tháo ngăn xếp qua ranh giới C) và `strip = true` (bỏ symbol: thư viện Linux từ 5.9 MB còn 5.2 MB, phần còn lại là mã máy; bản Windows để symbol ở tệp PDB riêng nên kích thước không đổi).
 - Thế giới (`World`) là con trỏ hộp (`Box`) trả cho C#; C# giữ `IntPtr` và gọi `fr_world_destroy` khi `Dispose`. Mọi hàm nhận con trỏ `null` thì trả giá trị rỗng (`false`, `0`), không đọc bộ nhớ.
 - Body có id `u32` do crate cấp, tăng dần từ 1, không dùng lại (P27: `BodyHandle` là định danh ổn định do crate cấp, ánh xạ sang handle Rapier). Bảng `BTreeMap<u32, BodyEntry>` giữ handle Rapier, công thức dựng (`BodyRecipe`: loại, khối lượng, danh sách collider) và cờ chạy lại được. `user_data` của body là id; của collider là id body ở 32 bit thấp, chỉ số collider trong body ở 32 bit kế (collider tĩnh có id body 0, chỉ số theo thứ tự thêm).
 - Collider: `FrCollider` `repr(C)` mang shape, tư thế cục bộ, kích thước, con trỏ đỉnh và chỉ số tam giác, ma sát, độ nảy, hai cách kết hợp, layer, cờ trigger. Mã shape và mã cách kết hợp trùng thứ tự `ShapeKind`, `CombineRule` của Core (C# truyền thẳng giá trị enum). `CombineRule.Mean` là `GeometricMean` của Rapier, không cần hook. Trigger là sensor. Layer thành `InteractionGroups` (thành viên `1 << layer`, lọc theo mặt nạ của layer, chế độ `And`). Mọi collider bật `ActiveCollisionTypes` trừ `FIXED_FIXED` (08.15). Bao lồi suy biến hoặc lưới hỏng thì việc dựng trả `None`, hàm FFI trả lỗi.
@@ -93,6 +93,7 @@ opt-level = 3
 lto = true
 codegen-units = 1
 panic = "abort"
+strip = true
 ```
 
 `native/fomoxa-rapier/src/lib.rs`:
