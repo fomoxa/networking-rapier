@@ -1,6 +1,6 @@
 # Fomoxa Networking Rapier
 
-`com.fomoxa.networking.rapier` is a physics backend for [`com.fomoxa.networking`](https://github.com/fomoxa/unity) built on [Rapier](https://rapier.rs). It replaces Unity's PhysX for network objects with Rapier worlds that behave the same on every supported platform. A Unity client and a server that runs without Unity, on Windows or Linux, compute the same physics state from the same inputs.
+`com.fomoxa.networking.rapier` is a physics backend for [`com.fomoxa.networking`](https://github.com/fomoxa/com.fomoxa.networking) built on [Rapier](https://rapier.rs). It replaces Unity's PhysX for network objects with Rapier worlds that behave the same on every supported platform. A Unity client and a server that runs without Unity, on Windows or Linux, compute the same physics state from the same inputs.
 
 | | |
 |---|---|
@@ -24,7 +24,7 @@ The Rigidbody backend of `com.fomoxa.networking` drives Unity's PhysX. PhysX can
 Add both packages from git in Window > Package Manager > + > Install package from git URL:
 
 ```
-https://github.com/fomoxa/unity.git?path=com.fomoxa.networking
+https://github.com/fomoxa/com.fomoxa.networking.git
 https://github.com/fomoxa/networking-rapier.git?path=com.fomoxa.networking.rapier
 ```
 
