@@ -1,0 +1,10 @@
+native/fomoxa-rapier/target/
+tests/bin/
+tests/obj/
+test-project/Library/
+test-project/Logs/
+test-project/Temp/
+test-project/UserSettings/
+checks/two-sided/bin/
+checks/two-sided/obj/
+checks/two-sided/out/

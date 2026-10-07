@@ -1,0 +1,19 @@
+{
+    "name": "Fomoxa.Networking.Rapier",
+    "rootNamespace": "Fomoxa.Networking.Rapier",
+    "references": [
+        "Fomoxa.Networking"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "Fomoxa.Net.dll",
+        "Fomoxa.Attributes.dll"
+    ],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

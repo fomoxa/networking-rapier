@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>9.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <IsPackable>false</IsPackable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <Unity>../../unity/com.fomoxa.networking</Unity>
+    <Package>../com.fomoxa.networking.rapier</Package>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="$(Unity)/Runtime/Core/**/*.cs" />
+    <Compile Include="$(Unity)/Tests/Fixtures/**/*.cs" />
+    <Compile Include="$(Unity)/Standalone~/**/*.cs" />
+    <Compile Include="$(Package)/Runtime/Rapier/**/*.cs" />
+    <Compile Include="*.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="$(Package)/Runtime/Plugins/Linux/x86_64/libfomoxa_rapier.so" Link="libfomoxa_rapier.so" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="$(Package)/Runtime/Plugins/Windows/x86_64/fomoxa_rapier.dll" Link="fomoxa_rapier.dll" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="Fomoxa.Attributes">
+      <HintPath>$(Unity)/Runtime/Plugins/Fomoxa.Attributes.dll</HintPath>
+    </Reference>
+    <Reference Include="Fomoxa.Net">
+      <HintPath>$(Unity)/Runtime/Plugins/Fomoxa.Net.dll</HintPath>
+    </Reference>
+    <PackageReference Include="NUnit" Version="3.14.0" />
+    <PackageReference Include="NUnit3TestAdapter" Version="4.6.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+  </ItemGroup>
+
+</Project>

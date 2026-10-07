@@ -1,0 +1,17 @@
+{
+  "name": "com.fomoxa.networking.rapier",
+  "version": "0.1.0",
+  "displayName": "Fomoxa Networking Rapier",
+  "description": "Rapier physics backend for com.fomoxa.networking: deterministic 3D and 2D worlds shared by Unity clients and console servers.",
+  "unity": "6000.5",
+  "license": "Apache-2.0",
+  "keywords": [
+    "fomoxa",
+    "networking",
+    "physics",
+    "rapier"
+  ],
+  "author": {
+    "name": "Fomoxa"
+  }
+}
