@@ -60,9 +60,9 @@ Với lịch sử 64 tick, một lần chạy lại dài cỡ một RTT gồm m�
 
 `APileReachesTheSameStateOnEveryPlatform` thả 20 hộp xoay lên sàn, chạy 300 bước và so với băm cố định `0xF1860E86303F3AED`; cùng băm trên Linux (glibc, .NET 8) và Windows (MSVC, .NET 9). 08.16 kiểm thêm giữa server console và client Unity (Mono).
 
-### Khác design
+### Design
 
-- P27 ghi crate "lấy `afjk/rapier-unity` làm mẫu (bảng thế giới theo `world_id`, handle `index` + `generation`, …)". Crate tự viết, không chép mã của mẫu đó, nên không có ghi chú giấy phép MIT: thế giới là con trỏ hộp thay cho bảng `world_id`, body là id `u32` không dùng lại thay cho `index` + `generation` (đúng ý P27 "định danh ổn định do crate cấp"). Snapshot có số định dạng, băm trạng thái chuẩn như mẫu.
+Bản đầu của P27 và Q163 (2) ghi crate lấy `afjk/rapier-unity` làm mẫu (bảng thế giới theo `world_id`, handle `index` + `generation`, ghi chú giấy phép MIT cho mã chép). Crate tự viết, không chép mã: thế giới là con trỏ do `RapierWorld`, `RapierWorld2D` giữ riêng và đặt về 0 khi hủy; body là id `u32` không dùng lại. Design đã sửa theo crate (P27 mục "Server console và 8b", ghi đè có lý do ở Q163 (2)).
 
 ---
 
