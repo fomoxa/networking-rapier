@@ -7,8 +7,15 @@ use serde::{Deserialize, Serialize};
 use crate::contact::{collider_ref, collider_tag, write_refs, FrColliderRef};
 use crate::hash::StableHasher;
 
-const SNAPSHOT_FORMAT: u32 = 1;
+const SNAPSHOT_FORMAT: u32 = 2;
 const ALL_LAYERS: u32 = u32::MAX;
+
+const LOCK_POSITION_X: u32 = 1;
+const LOCK_POSITION_Y: u32 = 2;
+const LOCK_POSITION_Z: u32 = 4;
+const LOCK_ROTATION_X: u32 = 8;
+const LOCK_ROTATION_Y: u32 = 16;
+const LOCK_ROTATION_Z: u32 = 32;
 
 const KIND_DYNAMIC: u32 = 0;
 const KIND_KINEMATIC: u32 = 1;
@@ -85,7 +92,17 @@ struct ColliderRecipe {
 struct BodyRecipe {
     kind: u32,
     mass: f32,
+    locks: u32,
+    gravity_scale: f32,
+    linear_damping: f32,
+    angular_damping: f32,
     colliders: Vec<ColliderRecipe>,
+}
+
+struct StaticSlot {
+    group: u32,
+    recipe: ColliderRecipe,
+    handle: Option<ColliderHandle>,
 }
 
 struct BodyEntry {
@@ -99,6 +116,7 @@ struct SnapshotRef<'a> {
     format: u32,
     world: &'a PhysicsWorld,
     handles: Vec<(u32, u32, u32)>,
+    statics: Vec<(u32, u32, u32)>,
 }
 
 #[derive(Deserialize)]
@@ -106,6 +124,7 @@ struct Snapshot {
     format: u32,
     world: PhysicsWorld,
     handles: Vec<(u32, u32, u32)>,
+    statics: Vec<(u32, u32, u32)>,
 }
 
 pub struct World {
@@ -113,7 +132,8 @@ pub struct World {
     bodies: BTreeMap<u32, BodyEntry>,
     next_id: u32,
     layers: [u32; 32],
-    statics: Vec<ColliderHandle>,
+    statics: Vec<StaticSlot>,
+    next_group: u32,
     scratch: Vec<u8>,
 }
 
@@ -127,6 +147,7 @@ impl World {
             next_id: 1,
             layers: [ALL_LAYERS; 32],
             statics: Vec::new(),
+            next_group: 1,
             scratch: Vec::new(),
         }
     }
@@ -141,22 +162,63 @@ impl World {
         }
     }
 
-    fn add_static(&mut self, colliders: Vec<ColliderRecipe>) -> bool {
+    fn add_static(&mut self, colliders: Vec<ColliderRecipe>) -> Option<(u32, u32)> {
+        let first = self.statics.len() as u32;
         let mut built = Vec::with_capacity(colliders.len());
         for (offset, recipe) in colliders.iter().enumerate() {
-            let tag = collider_tag(0, (self.statics.len() + offset) as u32);
-            match build_collider(recipe, &self.layers, 1.0, tag) {
-                Some(collider) => built.push(collider),
-                None => return false,
+            built.push(build_collider(recipe, &self.layers, 1.0, collider_tag(0, first + offset as u32))?);
+        }
+
+        let group = self.next_group;
+        self.next_group += 1;
+        for (collider, recipe) in built.into_iter().zip(colliders) {
+            let handle = self.physics.insert_collider(collider, None);
+            self.statics.push(StaticSlot { group, recipe, handle: Some(handle) });
+        }
+
+        Some((group, first))
+    }
+
+    fn remove_static(&mut self, group: u32) -> bool {
+        let mut removed = Vec::new();
+        for slot in self.statics.iter_mut().filter(|slot| slot.group == group) {
+            if let Some(handle) = slot.handle.take() {
+                removed.push(handle);
             }
         }
 
-        for collider in built {
-            let handle = self.physics.insert_collider(collider, None);
-            self.statics.push(handle);
+        for handle in &removed {
+            self.physics.remove_collider(*handle);
         }
 
-        true
+        !removed.is_empty()
+    }
+
+    fn restore_statics(&mut self, saved: &[(u32, u32, u32)]) {
+        let saved: BTreeMap<u32, ColliderHandle> = saved
+            .iter()
+            .map(|(index, raw, generation)| (*index, ColliderHandle::from_raw_parts(*raw, *generation)))
+            .collect();
+        for (index, handle) in &saved {
+            if self.statics.get(*index as usize).map_or(true, |slot| slot.handle.is_none()) {
+                self.physics.remove_collider(*handle);
+            }
+        }
+
+        for index in 0..self.statics.len() {
+            if self.statics[index].handle.is_none() {
+                continue;
+            }
+
+            match saved.get(&(index as u32)) {
+                Some(handle) => self.statics[index].handle = Some(*handle),
+                None => {
+                    if let Some(collider) = build_collider(&self.statics[index].recipe, &self.layers, 1.0, collider_tag(0, index as u32)) {
+                        self.statics[index].handle = Some(self.physics.insert_collider(collider, None));
+                    }
+                }
+            }
+        }
     }
 
     fn create_body(&mut self, recipe: BodyRecipe, position: [f32; 3], rotation: [f32; 4]) -> u32 {
@@ -182,6 +244,11 @@ impl World {
             KIND_KINEMATIC => RigidBodyBuilder::kinematic_position_based(),
             _ => RigidBodyBuilder::fixed(),
         };
+        let builder = builder
+            .locked_axes(locked_axes(recipe.locks))
+            .gravity_scale(recipe.gravity_scale)
+            .linear_damping(recipe.linear_damping)
+            .angular_damping(recipe.angular_damping);
         let handle = self.physics.insert_body(builder.pose(pose(position, rotation)).user_data(u128::from(id)).build());
         let mut collider_handles = Vec::with_capacity(built.len());
         for collider in built {
@@ -265,7 +332,18 @@ impl World {
                 (*id, index, generation)
             })
             .collect();
-        let snapshot = SnapshotRef { format: SNAPSHOT_FORMAT, world: &self.physics, handles };
+        let statics = self
+            .statics
+            .iter()
+            .enumerate()
+            .filter_map(|(index, slot)| {
+                slot.handle.map(|handle| {
+                    let (raw, generation) = handle.into_raw_parts();
+                    (index as u32, raw, generation)
+                })
+            })
+            .collect();
+        let snapshot = SnapshotRef { format: SNAPSHOT_FORMAT, world: &self.physics, handles, statics };
         self.scratch = bincode::serialize(&snapshot).unwrap_or_default();
         self.scratch.len()
     }
@@ -290,6 +368,7 @@ impl World {
             .map(|(id, index, generation)| (*id, RigidBodyHandle::from_raw_parts(*index, *generation)))
             .collect();
         self.physics = snapshot.world;
+        self.restore_statics(&snapshot.statics);
         let entries = std::mem::take(&mut self.bodies);
         let kept: BTreeSet<u32> = entries.keys().copied().collect();
         for (id, handle) in &saved {
@@ -413,7 +492,7 @@ impl World {
 
     fn collider_of(&self, body: u32, index: u32) -> Option<ColliderHandle> {
         if body == 0 {
-            return self.statics.get(index as usize).copied();
+            return self.statics.get(index as usize).and_then(|slot| slot.handle);
         }
 
         let tag = collider_tag(body, index);
@@ -505,8 +584,46 @@ fn apply_state(body: &mut RigidBody, state: &FrBodyState) {
         body.set_next_kinematic_rotation(rotation);
     }
 
-    body.set_linvel(Vector::new(state.velocity[0], state.velocity[1], state.velocity[2]), true);
-    body.set_angvel(Vector::new(state.angular_velocity[0], state.angular_velocity[1], state.angular_velocity[2]), true);
+    let locked = body.locked_axes();
+    let mut velocity = Vector::new(state.velocity[0], state.velocity[1], state.velocity[2]);
+    let mut angular_velocity = Vector::new(state.angular_velocity[0], state.angular_velocity[1], state.angular_velocity[2]);
+    if locked.contains(LockedAxes::TRANSLATION_LOCKED_X) {
+        velocity.x = 0.0;
+    }
+
+    if locked.contains(LockedAxes::TRANSLATION_LOCKED_Y) {
+        velocity.y = 0.0;
+    }
+
+    if locked.contains(LockedAxes::TRANSLATION_LOCKED_Z) {
+        velocity.z = 0.0;
+    }
+
+    if locked.contains(LockedAxes::ROTATION_LOCKED_X) {
+        angular_velocity.x = 0.0;
+    }
+
+    if locked.contains(LockedAxes::ROTATION_LOCKED_Y) {
+        angular_velocity.y = 0.0;
+    }
+
+    if locked.contains(LockedAxes::ROTATION_LOCKED_Z) {
+        angular_velocity.z = 0.0;
+    }
+
+    body.set_linvel(velocity, true);
+    body.set_angvel(angular_velocity, true);
+}
+
+fn locked_axes(locks: u32) -> LockedAxes {
+    let mut axes = LockedAxes::empty();
+    axes.set(LockedAxes::TRANSLATION_LOCKED_X, locks & LOCK_POSITION_X != 0);
+    axes.set(LockedAxes::TRANSLATION_LOCKED_Y, locks & LOCK_POSITION_Y != 0);
+    axes.set(LockedAxes::TRANSLATION_LOCKED_Z, locks & LOCK_POSITION_Z != 0);
+    axes.set(LockedAxes::ROTATION_LOCKED_X, locks & LOCK_ROTATION_X != 0);
+    axes.set(LockedAxes::ROTATION_LOCKED_Y, locks & LOCK_ROTATION_Y != 0);
+    axes.set(LockedAxes::ROTATION_LOCKED_Z, locks & LOCK_ROTATION_Z != 0);
+    axes
 }
 
 fn build_collider(recipe: &ColliderRecipe, layers: &[u32; 32], density: f32, tag: u128) -> Option<Collider> {
@@ -630,11 +747,23 @@ pub unsafe extern "C" fn fr_world_step(world_ptr: *mut World, seconds: f32) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn fr_world_add_static(world_ptr: *mut World, colliders: *const FrCollider, count: u32) -> bool {
-    match (world(world_ptr), read_colliders(colliders, count)) {
+pub unsafe extern "C" fn fr_world_add_static(world_ptr: *mut World, colliders: *const FrCollider, count: u32, first: *mut u32) -> u32 {
+    let added = match (world(world_ptr), read_colliders(colliders, count)) {
         (Some(world), Some(recipes)) => world.add_static(recipes),
-        _ => false,
+        _ => None,
+    };
+    match (added, first.as_mut()) {
+        (Some((group, index)), Some(out)) => {
+            *out = index;
+            group
+        }
+        _ => 0,
     }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fr_world_remove_static(world_ptr: *mut World, group: u32) -> bool {
+    world(world_ptr).map_or(false, |world| world.remove_static(group))
 }
 
 #[no_mangle]
@@ -644,6 +773,10 @@ pub unsafe extern "C" fn fr_body_create(
     position: *const f32,
     rotation: *const f32,
     mass: f32,
+    locks: u32,
+    gravity_scale: f32,
+    linear_damping: f32,
+    angular_damping: f32,
     colliders: *const FrCollider,
     count: u32,
 ) -> u32 {
@@ -662,7 +795,7 @@ pub unsafe extern "C" fn fr_body_create(
     let position = slice::from_raw_parts(position, 3);
     let rotation = slice::from_raw_parts(rotation, 4);
     world.create_body(
-        BodyRecipe { kind: kind.min(KIND_STATIC), mass, colliders: recipes },
+        BodyRecipe { kind: kind.min(KIND_STATIC), mass, locks, gravity_scale, linear_damping, angular_damping, colliders: recipes },
         [position[0], position[1], position[2]],
         [rotation[0], rotation[1], rotation[2], rotation[3]],
     )

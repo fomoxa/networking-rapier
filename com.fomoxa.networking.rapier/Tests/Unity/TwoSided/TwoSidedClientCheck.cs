@@ -121,7 +121,9 @@ namespace Fomoxa.Unity.Rapier.Tests
             sphere.sharedMaterial = material;
             var rigidbody = template.AddComponent<Rigidbody>();
             rigidbody.mass = 1f;
-            rigidbody.useGravity = false;
+            rigidbody.useGravity = TwoSidedScenario.BallMotion.UseGravity;
+            rigidbody.linearDamping = TwoSidedScenario.BallMotion.LinearDamping;
+            rigidbody.angularDamping = TwoSidedScenario.BallMotion.AngularDamping;
             template.AddComponent<TwoSidedBall>();
             template.SetActive(false);
             return template;

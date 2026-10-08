@@ -45,26 +45,29 @@ namespace Fomoxa.Networking.Rapier
             RapierNative.fr_world_set_layers(world, copy);
         }
 
-        public void AddStatic(IReadOnlyList<ColliderDesc> colliders)
+        public StaticGroup AddStatic(IReadOnlyList<ColliderDesc> colliders)
         {
             if (colliders == null)
             {
                 throw new ArgumentNullException(nameof(colliders));
             }
 
-            if (colliders.Count == 0)
-            {
-                return;
-            }
-
+            uint group;
+            uint first;
             using (var native = new RapierColliders(colliders))
             {
-                if (!RapierNative.fr_world_add_static(world, native.Native, (uint)native.Native.Length))
-                {
-                    throw new ArgumentException("Rapier refused a static collider (degenerate hull or mesh)", nameof(colliders));
-                }
+                group = RapierNative.fr_world_add_static(world, native.Native, (uint)native.Native.Length, out first);
             }
+
+            if (group == 0)
+            {
+                throw new ArgumentException("Rapier refused a static collider (degenerate hull or mesh)", nameof(colliders));
+            }
+
+            return new StaticGroup(0, (int)group, (int)first, colliders.Count);
         }
+
+        public void RemoveStatic(StaticGroup group) => RapierNative.fr_world_remove_static(world, (uint)group.Id);
 
         public void Step(float seconds) => RapierNative.fr_world_step(world, seconds);
 
@@ -97,7 +100,8 @@ namespace Fomoxa.Networking.Rapier
             uint id;
             using (var native = new RapierColliders(desc.Colliders))
             {
-                id = RapierNative.fr_body_create(world, (uint)desc.Kind, position, rotation, desc.Mass, native.Native, (uint)native.Native.Length);
+                BodyMotion motion = desc.Motion;
+                id = RapierNative.fr_body_create(world, (uint)desc.Kind, position, rotation, desc.Mass, (uint)motion.Locks, motion.UseGravity ? 1f : 0f, motion.LinearDamping, motion.AngularDamping, native.Native, (uint)native.Native.Length);
             }
 
             if (id == 0)

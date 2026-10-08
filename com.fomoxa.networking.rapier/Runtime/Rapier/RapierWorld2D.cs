@@ -45,26 +45,29 @@ namespace Fomoxa.Networking.Rapier
             RapierNative.fr2_world_set_layers(world, copy);
         }
 
-        public void AddStatic(IReadOnlyList<ColliderDesc2D> colliders)
+        public StaticGroup AddStatic(IReadOnlyList<ColliderDesc2D> colliders)
         {
             if (colliders == null)
             {
                 throw new ArgumentNullException(nameof(colliders));
             }
 
-            if (colliders.Count == 0)
-            {
-                return;
-            }
-
+            uint group;
+            uint first;
             using (var native = new RapierColliders2D(colliders))
             {
-                if (!RapierNative.fr2_world_add_static(world, native.Native, (uint)native.Native.Length))
-                {
-                    throw new ArgumentException("Rapier refused a static 2D collider (degenerate polygon or polyline)", nameof(colliders));
-                }
+                group = RapierNative.fr2_world_add_static(world, native.Native, (uint)native.Native.Length, out first);
             }
+
+            if (group == 0)
+            {
+                throw new ArgumentException("Rapier refused a static 2D collider (degenerate polygon or polyline)", nameof(colliders));
+            }
+
+            return new StaticGroup(0, (int)group, (int)first, colliders.Count);
         }
+
+        public void RemoveStatic(StaticGroup group) => RapierNative.fr2_world_remove_static(world, (uint)group.Id);
 
         public void Step(float seconds) => RapierNative.fr2_world_step(world, seconds);
 
@@ -95,7 +98,8 @@ namespace Fomoxa.Networking.Rapier
             uint id;
             using (var native = new RapierColliders2D(desc.Colliders))
             {
-                id = RapierNative.fr2_body_create(world, (uint)desc.Kind, desc.Position.X, desc.Position.Y, desc.Rotation, desc.Mass, native.Native, (uint)native.Native.Length);
+                BodyMotion2D motion = desc.Motion;
+                id = RapierNative.fr2_body_create(world, (uint)desc.Kind, desc.Position.X, desc.Position.Y, desc.Rotation, desc.Mass, (uint)motion.Locks, motion.GravityScale, motion.LinearDamping, motion.AngularDamping, native.Native, (uint)native.Native.Length);
             }
 
             if (id == 0)

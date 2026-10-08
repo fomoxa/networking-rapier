@@ -17,6 +17,8 @@ namespace Fomoxa.Unity.Rapier
         private readonly Dictionary<Collider2D, Place> places2D = new Dictionary<Collider2D, Place>();
         private readonly Dictionary<NetworkObject, BodyColliders> bodies = new Dictionary<NetworkObject, BodyColliders>();
         private readonly Dictionary<uint, SceneColliders> loaded = new Dictionary<uint, SceneColliders>();
+        private readonly Dictionary<int, GroupColliders> groups = new Dictionary<int, GroupColliders>();
+        private readonly List<int> leavingGroups = new List<int>();
         private readonly List<RapierCollider> touched = new List<RapierCollider>();
         private readonly List<NetworkTrigger> triggers = new List<NetworkTrigger>();
         private readonly List<NetworkCollision> collisions = new List<NetworkCollision>();
@@ -149,8 +151,82 @@ namespace Fomoxa.Unity.Rapier
             }
         }
 
+        public void AddGroup(StaticGroup group, RapierWorld world, List<Collider> sources, GameObject root)
+        {
+            if (!statics.TryGetValue(world, out List<Collider> indexed))
+            {
+                indexed = new List<Collider>();
+                statics.Add(world, indexed);
+            }
+
+            Assign(indexed, group.FirstIndex, sources);
+            Locate(sources, world, default, places, group.FirstIndex);
+            var entry = new GroupColliders { SceneId = group.SceneId, World = world, Sources = sources, FirstIndex = group.FirstIndex };
+            groups.Add(group.Id, entry);
+            root.GetComponentsInChildren(true, triggers);
+            root.GetComponentsInChildren(true, collisions);
+            DropNetworkObjects(triggers);
+            DropNetworkObjects(collisions);
+            Claim(TrackerFor(world), entry.Claimed);
+        }
+
+        public void AddGroup2D(StaticGroup group, RapierWorld2D world, List<Collider2D> sources, GameObject root)
+        {
+            if (!statics2D.TryGetValue(world, out List<Collider2D> indexed))
+            {
+                indexed = new List<Collider2D>();
+                statics2D.Add(world, indexed);
+            }
+
+            Assign(indexed, group.FirstIndex, sources);
+            Locate(sources, world, default, places2D, group.FirstIndex);
+            var entry = new GroupColliders { SceneId = group.SceneId, World2D = world, Sources2D = sources, FirstIndex = group.FirstIndex };
+            groups.Add(group.Id, entry);
+            root.GetComponentsInChildren(true, triggers2D);
+            root.GetComponentsInChildren(true, collisions2D);
+            DropNetworkObjects(triggers2D);
+            DropNetworkObjects(collisions2D);
+            Claim(TrackerFor2D(world), entry.Claimed);
+        }
+
+        public void RemoveGroup(int groupId)
+        {
+            if (!groups.Remove(groupId, out GroupColliders entry))
+            {
+                return;
+            }
+
+            Release(entry.Claimed);
+            if (entry.World != null && statics.TryGetValue(entry.World, out List<Collider> indexed))
+            {
+                Forget(entry.Sources, entry.World, places);
+                Clear(indexed, entry.FirstIndex, entry.Sources.Count);
+            }
+
+            if (entry.World2D != null && statics2D.TryGetValue(entry.World2D, out List<Collider2D> indexed2D))
+            {
+                Forget(entry.Sources2D, entry.World2D, places2D);
+                Clear(indexed2D, entry.FirstIndex, entry.Sources2D.Count);
+            }
+        }
+
         public void UnloadScene(uint sceneId)
         {
+            leavingGroups.Clear();
+            foreach (KeyValuePair<int, GroupColliders> group in groups)
+            {
+                if (group.Value.SceneId == sceneId)
+                {
+                    leavingGroups.Add(group.Key);
+                }
+            }
+
+            foreach (int groupId in leavingGroups)
+            {
+                RemoveGroup(groupId);
+            }
+
+            leavingGroups.Clear();
             if (!loaded.Remove(sceneId, out SceneColliders entry))
             {
                 return;
@@ -182,8 +258,14 @@ namespace Fomoxa.Unity.Rapier
                 Release(entry.Claimed);
             }
 
+            foreach (GroupColliders entry in groups.Values)
+            {
+                Release(entry.Claimed);
+            }
+
             bodies.Clear();
             loaded.Clear();
+            groups.Clear();
             trackers.Clear();
             trackers2D.Clear();
             statics.Clear();
@@ -356,11 +438,12 @@ namespace Fomoxa.Unity.Rapier
             claimed.Clear();
         }
 
-        private static void Locate<TCollider>(List<TCollider> sources, IPhysicsSimulation world, BodyHandle body, Dictionary<TCollider, Place> into)
+        private static void Locate<TCollider>(List<TCollider> sources, IPhysicsSimulation world, BodyHandle body, Dictionary<TCollider, Place> into, int firstIndex = 0)
         {
-            for (int index = 0; index < sources.Count; index++)
+            for (int offset = 0; offset < sources.Count; offset++)
             {
-                TCollider source = sources[index];
+                TCollider source = sources[offset];
+                int index = firstIndex + offset;
                 if (into.TryGetValue(source, out Place place) && ReferenceEquals(place.World, world) && place.First.Index + place.Count == index)
                 {
                     into[source] = new Place(world, place.First, place.Count + 1);
@@ -369,6 +452,29 @@ namespace Fomoxa.Unity.Rapier
                 {
                     into[source] = new Place(world, body.IsValid ? RapierCollider.OfBody(body, index) : RapierCollider.Static(index), 1);
                 }
+            }
+        }
+
+        private static void Assign<TCollider>(List<TCollider> indexed, int firstIndex, List<TCollider> sources)
+            where TCollider : class
+        {
+            while (indexed.Count < firstIndex + sources.Count)
+            {
+                indexed.Add(null);
+            }
+
+            for (int offset = 0; offset < sources.Count; offset++)
+            {
+                indexed[firstIndex + offset] = sources[offset];
+            }
+        }
+
+        private static void Clear<TCollider>(List<TCollider> indexed, int firstIndex, int count)
+            where TCollider : class
+        {
+            for (int index = firstIndex; index < firstIndex + count && index < indexed.Count; index++)
+            {
+                indexed[index] = null;
             }
         }
 
@@ -416,6 +522,17 @@ namespace Fomoxa.Unity.Rapier
 
         private sealed class BodyColliders
         {
+            public RapierWorld World;
+            public RapierWorld2D World2D;
+            public List<Collider> Sources;
+            public List<Collider2D> Sources2D;
+            public readonly List<MonoBehaviour> Claimed = new List<MonoBehaviour>();
+        }
+
+        private sealed class GroupColliders
+        {
+            public uint SceneId;
+            public int FirstIndex;
             public RapierWorld World;
             public RapierWorld2D World2D;
             public List<Collider> Sources;

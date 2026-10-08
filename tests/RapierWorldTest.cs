@@ -372,6 +372,59 @@ namespace Fomoxa.Networking.Rapier.Tests
             }
         }
 
+        [Test]
+        public void AStaticGroupComesAndGoesAndLoadFollowsIt()
+        {
+            using (var world = new RapierWorld(Gravity))
+            {
+                PhysicsSnapshot before = world.CreateSnapshot();
+                world.Save(before);
+                StaticGroup ground = world.AddStatic(new[] { Ground(0) });
+                world.Load(before);
+                BodyHandle ball = world.CreateBody(Ball(new Vector3(0f, 2f, 0f), 1f));
+
+                Run(world, 120);
+
+                Assert.AreEqual((0, 1), (ground.FirstIndex, ground.Count));
+                Assert.AreEqual(0.5f, world.GetBody(ball).Position.Y, 0.05f);
+                PhysicsSnapshot resting = world.CreateSnapshot();
+                world.Save(resting);
+                world.RemoveStatic(ground);
+                world.Load(resting);
+                Run(world, 60);
+
+                Assert.Less(world.GetBody(ball).Position.Y, -1f);
+                Assert.AreEqual(1, world.AddStatic(new[] { Ground(0) }).FirstIndex);
+            }
+        }
+
+        [Test]
+        public void TheMotionOfABodyLocksAxesTurnsGravityOffAndDamps()
+        {
+            using (var world = new RapierWorld(Gravity))
+            {
+                BodyHandle floating = world.CreateBody(Cube(new Vector3(0f, 0f, 0f), new BodyMotion(BodyLocks.None, false, 0f, 0f)));
+                BodyHandle locked = world.CreateBody(Cube(new Vector3(10f, 0f, 0f), new BodyMotion(BodyLocks.PositionX | BodyLocks.RotationX | BodyLocks.RotationZ, true, 0f, 0f)));
+                BodyHandle damped = world.CreateBody(Cube(new Vector3(20f, 0f, 0f), new BodyMotion(BodyLocks.None, false, 1f, 0f)));
+                world.SetBody(locked, new BodyState { Position = new Vector3(10f, 0f, 0f), Rotation = Quaternion.Identity, Velocity = new Vector3(5f, 0f, 0f), AngularVelocity = new Vector3(3f, 3f, 3f) });
+                world.SetBody(damped, new BodyState { Position = new Vector3(20f, 0f, 0f), Rotation = Quaternion.Identity, Velocity = new Vector3(6f, 0f, 0f) });
+
+                Run(world, 30);
+
+                Assert.AreEqual(Vector3.Zero, world.GetBody(floating).Position);
+                BodyState state = world.GetBody(locked);
+                Assert.AreEqual(10f, state.Position.X);
+                Assert.Less(state.Position.Y, -1f);
+                Vector3 axis = Vector3.Transform(Vector3.UnitY, state.Rotation);
+                Assert.AreEqual(1f, axis.Y, 1e-4f);
+                Assert.Less(world.GetBody(damped).Velocity.X, 6f * 0.65f);
+                Assert.Greater(world.GetBody(damped).Velocity.X, 6f * 0.55f);
+            }
+        }
+
+        private static BodyDesc Cube(Vector3 position, BodyMotion motion) =>
+            new BodyDesc(BodyKind.Dynamic, new[] { new ColliderDesc(BodyShape.Box(new Vector3(0.5f)), Vector3.Zero, Quaternion.Identity, ColliderMaterial.Default, 0, false) }, position, Quaternion.Identity, 1f, motion);
+
         private static List<RapierCollider> Touching(RapierWorld world, RapierCollider collider)
         {
             var touching = new List<RapierCollider>();

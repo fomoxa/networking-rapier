@@ -27,8 +27,10 @@ namespace Fomoxa.Networking.Rapier.TwoSided
             new Vector3(3f, 5f, -1f),
         };
 
+        public static readonly BodyMotion BallMotion = new BodyMotion(BodyLocks.None, false, 0f, 0f);
+
         public static BodyDesc Ball(Vector3 position) =>
-            new BodyDesc(BodyKind.Dynamic, new[] { new ColliderDesc(BodyShape.Sphere(0.5f), Vector3.Zero, Quaternion.Identity, BallMaterial, 0, false) }, position, Quaternion.Identity, 1f);
+            new BodyDesc(BodyKind.Dynamic, new[] { new ColliderDesc(BodyShape.Sphere(0.5f), Vector3.Zero, Quaternion.Identity, BallMaterial, 0, false) }, position, Quaternion.Identity, 1f, BallMotion);
 
         public static SceneFile Arena(uint sceneId)
         {

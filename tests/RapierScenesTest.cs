@@ -299,6 +299,69 @@ namespace Fomoxa.Networking.Rapier.Tests
             }
         }
 
+        [Test]
+        public void StaticGroupsContinueTheStaticIndicesOfTheSceneFileAndCanBeRemoved()
+        {
+            using (var scenes = new RapierScenes())
+            {
+                scenes.LoadScene(Flatland(ArenaSceneId));
+                StaticGroup ledge = scenes.AddStatic2D(ArenaSceneId, new[] { new ColliderDesc2D(BodyShape2D.Box(new Vector2(1f, 0.5f)), new Vector2(20f, 2f), 0f, ColliderMaterial.Default, 0, false) });
+                StaticGroup floor = scenes.AddStatic(LobbySceneId, new[] { new ColliderDesc(BodyShape.Box(new Vector3(10f, 0.5f, 10f)), new Vector3(0f, -0.5f, 0f), Quaternion.Identity, ColliderMaterial.Default, 0, false) });
+                PhysicsBody2D crate = scenes.AddBody2D(ArenaSceneId, new BodyDesc2D(BodyKind.Dynamic, BodyShape2D.Box(new Vector2(0.5f, 0.5f)), new Vector2(20f, 5f), 0f, 1f));
+
+                Run(scenes, 120);
+
+                Assert.AreEqual((ArenaSceneId, 1, 1), (ledge.SceneId, ledge.FirstIndex, ledge.Count));
+                Assert.AreEqual((LobbySceneId, 0, 1), (floor.SceneId, floor.FirstIndex, floor.Count));
+                Assert.AreNotEqual(ledge.Id, floor.Id);
+                Assert.AreEqual(3f, crate.Position.Y, 0.05f);
+                var touching = new List<RapierCollider>();
+                scenes.WorldOf2D(ArenaSceneId).Touching(RapierCollider.Static(ledge.FirstIndex), touching);
+                Assert.AreEqual(1, touching.Count);
+
+                scenes.RemoveStatic(ledge);
+                Run(scenes, 120);
+
+                Assert.Less(crate.Position.Y, 1f);
+            }
+        }
+
+        [Test]
+        public void UnownedBodiesBelongToNoEntityAndLeaveWithTheirScene()
+        {
+            using (var scenes = new RapierScenes())
+            {
+                scenes.LoadScene(Flatland(ArenaSceneId));
+                StaticGroup ledge = scenes.AddStatic2D(ArenaSceneId, new[] { new ColliderDesc2D(BodyShape2D.Box(Vector2.One), new Vector2(5f, 5f), 0f, ColliderMaterial.Default, 0, false) });
+                PhysicsBody2D lift = scenes.AddBody2D(ArenaSceneId, new BodyDesc2D(BodyKind.Kinematic, BodyShape2D.Box(Vector2.One), new Vector2(-5f, 1f), 0f, 0f));
+                PhysicsBody2D crate = scenes.AddBody2D(ArenaSceneId, new BodyDesc2D(BodyKind.Dynamic, BodyShape2D.Box(new Vector2(0.5f, 0.5f)), new Vector2(-8f, 1f), 0f, 1f));
+                PhysicsBody ball = scenes.AddBody(LobbySceneId, Ball(Vector3.Zero));
+                StandaloneEntity entity = Entity();
+                scenes.AddBody(entity, ArenaSceneId, Ball(Vector3.Zero));
+                var worlds = new List<IPhysicsSimulation>();
+                var stepping = new List<IPhysicsSimulation>();
+
+                scenes.WorldsOf(entity, worlds);
+                scenes.WorldsToStep(stepping);
+                lift.Position = new Vector2(-6f, 1f);
+                scenes.RemoveBody2D(lift);
+                scenes.RemoveBody2D(lift);
+
+                CollectionAssert.AreEqual(new IPhysicsSimulation[] { scenes.WorldOf(ArenaSceneId) }, worlds);
+                CollectionAssert.Contains(stepping, scenes.WorldOf(LobbySceneId));
+                Assert.IsFalse(lift.IsValid);
+                Assert.IsTrue(crate.IsValid);
+                Assert.IsTrue(ball.IsValid);
+
+                scenes.UnloadScene(ArenaSceneId);
+
+                Assert.IsFalse(crate.IsValid);
+                Assert.DoesNotThrow(() => scenes.RemoveStatic(ledge));
+                Assert.DoesNotThrow(() => scenes.RemoveBody2D(crate));
+                Assert.IsTrue(ball.IsValid);
+            }
+        }
+
         private static SceneFile Flatland(uint sceneId)
         {
             var file = new SceneFile { SceneId = sceneId };

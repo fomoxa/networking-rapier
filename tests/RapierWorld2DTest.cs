@@ -194,6 +194,113 @@ namespace Fomoxa.Networking.Rapier.Tests
             }
         }
 
+        [Test]
+        public void AStaticGroupHoldsABallUntilItIsRemovedAndItsIndicesAreNotReused()
+        {
+            using (var world = new RapierWorld2D(Gravity))
+            {
+                StaticGroup ground = world.AddStatic(new[] { Ground() });
+                BodyHandle ball = world.CreateBody(Circle(new Vector2(0f, 2f), 1f));
+
+                Run(world, 120);
+
+                Assert.IsTrue(ground.IsValid);
+                Assert.AreEqual((0, 1), (ground.FirstIndex, ground.Count));
+                Assert.AreEqual(0.5f, world.GetBody(ball).Position.Y, 0.05f);
+                CollectionAssert.AreEqual(new[] { RapierCollider.Static(0) }, Touching(world, RapierCollider.OfBody(ball, 0)));
+
+                world.RemoveStatic(ground);
+                world.RemoveStatic(ground);
+                Run(world, 60);
+
+                Assert.Less(world.GetBody(ball).Position.Y, -1f);
+                StaticGroup again = world.AddStatic(new[] { Ground() });
+                StaticGroup empty = world.AddStatic(Array.Empty<ColliderDesc2D>());
+                Assert.AreEqual((1, 1), (again.FirstIndex, again.Count));
+                Assert.AreEqual((2, 0), (empty.FirstIndex, empty.Count));
+                Assert.AreNotEqual(again.Id, ground.Id);
+                Assert.AreNotEqual(empty.Id, again.Id);
+            }
+        }
+
+        [Test]
+        public void LoadKeepsAStaticGroupAddedSinceTheSnapshotAndDropsOneRemovedSince()
+        {
+            using (var world = new RapierWorld2D(Gravity))
+            {
+                PhysicsSnapshot before = world.CreateSnapshot();
+                world.Save(before);
+                StaticGroup ground = world.AddStatic(new[] { Ground() });
+
+                world.Load(before);
+
+                Assert.IsTrue(world.Raycast(new Vector2(0f, 5f), new Vector2(0f, -1f), 10f, out RayHit2D kept));
+                Assert.AreEqual(0f, kept.Point.Y, 1e-4f);
+                BodyHandle ball = world.CreateBody(Circle(new Vector2(0f, 2f), 1f));
+                Run(world, 120);
+                CollectionAssert.AreEqual(new[] { RapierCollider.Static(0) }, Touching(world, RapierCollider.OfBody(ball, 0)));
+
+                PhysicsSnapshot withGround = world.CreateSnapshot();
+                world.Save(withGround);
+                world.RemoveStatic(ground);
+                world.Load(withGround);
+
+                Assert.IsFalse(world.Raycast(new Vector2(0f, 5f), new Vector2(0f, -10f), 3f, out _));
+                Run(world, 60);
+                Assert.Less(world.GetBody(ball).Position.Y, -1f);
+            }
+        }
+
+        [Test]
+        public void TheMotionOfABodyLocksScalesGravityAndDamps()
+        {
+            using (var world = new RapierWorld2D(Gravity))
+            {
+                BodyHandle free = world.CreateBody(Box(new Vector2(0f, 0f), BodyMotion2D.Default));
+                BodyHandle heavy = world.CreateBody(Box(new Vector2(10f, 0f), new BodyMotion2D(BodyLocks2D.None, 1.5f, 0f, 0f)));
+                BodyHandle upright = world.CreateBody(Box(new Vector2(20f, 0f), new BodyMotion2D(BodyLocks2D.Rotation | BodyLocks2D.PositionX, 1f, 0f, 0f)));
+                BodyHandle damped = world.CreateBody(Box(new Vector2(30f, 0f), new BodyMotion2D(BodyLocks2D.None, 0f, 1f, 0f)));
+                world.SetBody(upright, new BodyState2D { Position = new Vector2(20f, 0f), Velocity = new Vector2(5f, 0f), AngularVelocity = 4f });
+                world.SetBody(free, new BodyState2D { AngularVelocity = 4f });
+                world.SetBody(damped, new BodyState2D { Position = new Vector2(30f, 0f), Velocity = new Vector2(6f, 0f) });
+
+                Run(world, 30);
+
+                Assert.AreEqual(1.5f, world.GetBody(heavy).Position.Y / world.GetBody(free).Position.Y, 1e-3f);
+                Assert.AreEqual(2f, world.GetBody(free).Rotation, 0.05f);
+                Assert.AreEqual((20f, 0f), (world.GetBody(upright).Position.X, world.GetBody(upright).Rotation));
+                Assert.AreEqual(world.GetBody(free).Position.Y, world.GetBody(upright).Position.Y, 1e-4f);
+                Assert.AreEqual(0f, world.GetBody(damped).Position.Y);
+                Assert.Less(world.GetBody(damped).Velocity.X, 6f * 0.65f);
+                Assert.Greater(world.GetBody(damped).Velocity.X, 6f * 0.55f);
+            }
+        }
+
+        [Test]
+        public void ABodyCreatedAfterTheSnapshotKeepsItsMotionWhenLoadPutsItBack()
+        {
+            using (var world = new RapierWorld2D(Gravity))
+            {
+                PhysicsSnapshot before = world.CreateSnapshot();
+                world.Save(before);
+                BodyHandle upright = world.CreateBody(Box(Vector2.Zero, new BodyMotion2D(BodyLocks2D.Rotation, 0f, 0f, 0f)));
+                world.SetBody(upright, new BodyState2D { AngularVelocity = 4f });
+
+                world.Load(before);
+                world.SetBody(upright, new BodyState2D { AngularVelocity = 4f });
+                Run(world, 30);
+
+                BodyState2D state = world.GetBody(upright);
+                Assert.AreEqual((0f, 0f), (state.Rotation, state.Position.Y));
+            }
+        }
+
+        private static ColliderDesc2D Ground() =>
+            new ColliderDesc2D(BodyShape2D.Box(new Vector2(10f, 0.5f)), new Vector2(0f, -0.5f), 0f, ColliderMaterial.Default, 0, false);
+
+        private static BodyDesc2D Box(Vector2 position, BodyMotion2D motion) =>
+            new BodyDesc2D(BodyKind.Dynamic, new[] { new ColliderDesc2D(BodyShape2D.Box(new Vector2(0.5f, 0.5f)), Vector2.Zero, 0f, ColliderMaterial.Default, 0, false) }, position, 0f, 1f, motion);
+
         private static List<RapierCollider> Touching(RapierWorld2D world, RapierCollider collider)
         {
             var touching = new List<RapierCollider>();

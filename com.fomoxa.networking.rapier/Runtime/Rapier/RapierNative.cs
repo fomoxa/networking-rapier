@@ -87,11 +87,14 @@ namespace Fomoxa.Networking.Rapier
         internal static extern void fr_world_step(IntPtr world, float seconds);
 
         [DllImport(Library)]
-        [return: MarshalAs(UnmanagedType.U1)]
-        internal static extern bool fr_world_add_static(IntPtr world, Collider[] colliders, uint count);
+        internal static extern uint fr_world_add_static(IntPtr world, Collider[] colliders, uint count, out uint first);
 
         [DllImport(Library)]
-        internal static extern uint fr_body_create(IntPtr world, uint kind, float[] position, float[] rotation, float mass, Collider[] colliders, uint count);
+        [return: MarshalAs(UnmanagedType.U1)]
+        internal static extern bool fr_world_remove_static(IntPtr world, uint group);
+
+        [DllImport(Library)]
+        internal static extern uint fr_body_create(IntPtr world, uint kind, float[] position, float[] rotation, float mass, uint locks, float gravityScale, float linearDamping, float angularDamping, Collider[] colliders, uint count);
 
         [DllImport(Library)]
         [return: MarshalAs(UnmanagedType.U1)]
@@ -212,11 +215,14 @@ namespace Fomoxa.Networking.Rapier
         internal static extern void fr2_world_step(IntPtr world, float seconds);
 
         [DllImport(Library)]
-        [return: MarshalAs(UnmanagedType.U1)]
-        internal static extern bool fr2_world_add_static(IntPtr world, Collider2D[] colliders, uint count);
+        internal static extern uint fr2_world_add_static(IntPtr world, Collider2D[] colliders, uint count, out uint first);
 
         [DllImport(Library)]
-        internal static extern uint fr2_body_create(IntPtr world, uint kind, float x, float y, float rotation, float mass, Collider2D[] colliders, uint count);
+        [return: MarshalAs(UnmanagedType.U1)]
+        internal static extern bool fr2_world_remove_static(IntPtr world, uint group);
+
+        [DllImport(Library)]
+        internal static extern uint fr2_body_create(IntPtr world, uint kind, float x, float y, float rotation, float mass, uint locks, float gravityScale, float linearDamping, float angularDamping, Collider2D[] colliders, uint count);
 
         [DllImport(Library)]
         [return: MarshalAs(UnmanagedType.U1)]

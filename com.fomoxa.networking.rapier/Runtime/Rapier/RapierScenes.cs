@@ -21,6 +21,11 @@ namespace Fomoxa.Networking.Rapier
         private readonly Dictionary<IPhysicsSimulation, PhysicsHistory> histories = new Dictionary<IPhysicsSimulation, PhysicsHistory>();
         private readonly Dictionary<uint, List<uint>> layers = new Dictionary<uint, List<uint>>();
         private readonly Dictionary<uint, List<uint>> layers2D = new Dictionary<uint, List<uint>>();
+        private readonly Dictionary<int, StaticEntry> statics = new Dictionary<int, StaticEntry>();
+        private readonly List<int> leavingStatics = new List<int>();
+        private readonly List<UnownedBody> unowned = new List<UnownedBody>();
+        private readonly List<UnownedBody2D> unowned2D = new List<UnownedBody2D>();
+        private int nextStatic = 1;
 
         public RapierScenes()
             : this(EarthGravity)
@@ -130,6 +135,7 @@ namespace Fomoxa.Networking.Rapier
             {
                 histories.Remove(world);
                 ForgetOwners(world);
+                unowned.RemoveAll(entry => ReferenceEquals(entry.World, world));
                 world.Dispose();
             }
 
@@ -137,7 +143,71 @@ namespace Fomoxa.Networking.Rapier
             {
                 histories.Remove(world2D);
                 ForgetOwners(world2D);
+                unowned2D.RemoveAll(entry => ReferenceEquals(entry.World, world2D));
                 world2D.Dispose();
+            }
+
+            ForgetStatics(sceneId);
+        }
+
+        public StaticGroup AddStatic(uint sceneId, IReadOnlyList<ColliderDesc> colliders)
+        {
+            RapierWorld world = WorldOf(sceneId);
+            return Remember(new StaticEntry(sceneId, world, null, world.AddStatic(colliders)));
+        }
+
+        public StaticGroup AddStatic2D(uint sceneId, IReadOnlyList<ColliderDesc2D> colliders)
+        {
+            RapierWorld2D world = WorldOf2D(sceneId);
+            return Remember(new StaticEntry(sceneId, null, world, world.AddStatic(colliders)));
+        }
+
+        public void RemoveStatic(StaticGroup group)
+        {
+            if (!statics.Remove(group.Id, out StaticEntry entry))
+            {
+                return;
+            }
+
+            entry.World?.RemoveStatic(entry.Inner);
+            entry.World2D?.RemoveStatic(entry.Inner);
+        }
+
+        public PhysicsBody AddBody(uint sceneId, in BodyDesc body)
+        {
+            RapierWorld world = WorldOf(sceneId);
+            BodyHandle handle = world.CreateBody(body);
+            var created = new PhysicsBody(world, handle);
+            unowned.Add(new UnownedBody(world, handle, created));
+            return created;
+        }
+
+        public PhysicsBody2D AddBody2D(uint sceneId, in BodyDesc2D body)
+        {
+            RapierWorld2D world = WorldOf2D(sceneId);
+            BodyHandle handle = world.CreateBody(body);
+            var created = new PhysicsBody2D(world, handle);
+            unowned2D.Add(new UnownedBody2D(world, handle, created));
+            return created;
+        }
+
+        public void RemoveBody(PhysicsBody body)
+        {
+            int index = unowned.FindIndex(entry => EqualityComparer<PhysicsBody>.Default.Equals(entry.Body, body));
+            if (index >= 0)
+            {
+                unowned[index].World.RemoveBody(unowned[index].Handle);
+                unowned.RemoveAt(index);
+            }
+        }
+
+        public void RemoveBody2D(PhysicsBody2D body)
+        {
+            int index = unowned2D.FindIndex(entry => EqualityComparer<PhysicsBody2D>.Default.Equals(entry.Body, body));
+            if (index >= 0)
+            {
+                unowned2D[index].World.RemoveBody(unowned2D[index].Handle);
+                unowned2D.RemoveAt(index);
             }
         }
 
@@ -300,6 +370,9 @@ namespace Fomoxa.Networking.Rapier
             bodies.Clear();
             owners.Clear();
             histories.Clear();
+            statics.Clear();
+            unowned.Clear();
+            unowned2D.Clear();
         }
 
         private static void Remember(Dictionary<uint, List<uint>> remembered, uint sceneId, List<uint> masks)
@@ -336,6 +409,32 @@ namespace Fomoxa.Networking.Rapier
             owners[(world, handle)] = entity;
         }
 
+        private StaticGroup Remember(StaticEntry entry)
+        {
+            int id = nextStatic++;
+            statics.Add(id, entry);
+            return new StaticGroup(entry.SceneId, id, entry.Inner.FirstIndex, entry.Inner.Count);
+        }
+
+        private void ForgetStatics(uint sceneId)
+        {
+            leavingStatics.Clear();
+            foreach (KeyValuePair<int, StaticEntry> entry in statics)
+            {
+                if (entry.Value.SceneId == sceneId)
+                {
+                    leavingStatics.Add(entry.Key);
+                }
+            }
+
+            foreach (int id in leavingStatics)
+            {
+                statics.Remove(id);
+            }
+
+            leavingStatics.Clear();
+        }
+
         private void ForgetOwners(IPhysicsSimulation world)
         {
             forgotten.Clear();
@@ -353,6 +452,57 @@ namespace Fomoxa.Networking.Rapier
             }
 
             forgotten.Clear();
+        }
+
+        private readonly struct StaticEntry
+        {
+            public StaticEntry(uint sceneId, RapierWorld world, RapierWorld2D world2D, StaticGroup inner)
+            {
+                SceneId = sceneId;
+                World = world;
+                World2D = world2D;
+                Inner = inner;
+            }
+
+            public uint SceneId { get; }
+
+            public RapierWorld World { get; }
+
+            public RapierWorld2D World2D { get; }
+
+            public StaticGroup Inner { get; }
+        }
+
+        private readonly struct UnownedBody
+        {
+            public UnownedBody(RapierWorld world, BodyHandle handle, PhysicsBody body)
+            {
+                World = world;
+                Handle = handle;
+                Body = body;
+            }
+
+            public RapierWorld World { get; }
+
+            public BodyHandle Handle { get; }
+
+            public PhysicsBody Body { get; }
+        }
+
+        private readonly struct UnownedBody2D
+        {
+            public UnownedBody2D(RapierWorld2D world, BodyHandle handle, PhysicsBody2D body)
+            {
+                World = world;
+                Handle = handle;
+                Body = body;
+            }
+
+            public RapierWorld2D World { get; }
+
+            public BodyHandle Handle { get; }
+
+            public PhysicsBody2D Body { get; }
         }
 
         private readonly struct Part

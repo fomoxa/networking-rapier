@@ -206,6 +206,77 @@ namespace Fomoxa.Unity.Rapier
 
         public override IContactTracker TrackerOf(IPhysicsSimulation world) => contacts?.TrackerOf(world is SteppedWorld wrapper ? wrapper.Inner : world);
 
+        public override StaticGroup AddStatic(Scene scene, IReadOnlyList<ColliderDesc> colliders) => Begun().AddStatic(IdOf(scene), colliders);
+
+        public override StaticGroup AddStatic2D(Scene scene, IReadOnlyList<ColliderDesc2D> colliders) => Begun().AddStatic2D(IdOf(scene), colliders);
+
+        public override StaticGroup AddStatic(GameObject root)
+        {
+            if (root == null)
+            {
+                throw new ArgumentNullException(nameof(root));
+            }
+
+            uint sceneId = IdOf(root.scene);
+            var sources = new List<Collider>();
+            var colliders = new List<ColliderDesc>();
+            BodyDescriptions.StaticColliders(root, sources);
+            for (int index = 0; index < sources.Count; index++)
+            {
+                if (index == 0 || sources[index] != sources[index - 1])
+                {
+                    BodyDescriptions.DescribeStatic(sources[index], null, colliders);
+                }
+            }
+
+            StaticGroup group = Begun().AddStatic(sceneId, colliders);
+            contacts.AddGroup(group, scenes.WorldOf(sceneId), sources, root);
+            return group;
+        }
+
+        public override StaticGroup AddStatic2D(GameObject root)
+        {
+            if (root == null)
+            {
+                throw new ArgumentNullException(nameof(root));
+            }
+
+            uint sceneId = IdOf(root.scene);
+            var sources = new List<Collider2D>();
+            var colliders = new List<ColliderDesc2D>();
+            BodyDescriptions.StaticColliders2D(root, sources);
+            for (int index = 0; index < sources.Count; index++)
+            {
+                if (index == 0 || sources[index] != sources[index - 1])
+                {
+                    BodyDescriptions.DescribeStatic2D(sources[index], null, colliders);
+                }
+            }
+
+            StaticGroup group = Begun().AddStatic2D(sceneId, colliders);
+            contacts.AddGroup2D(group, scenes.WorldOf2D(sceneId), sources, root);
+            return group;
+        }
+
+        public override void RemoveStatic(StaticGroup group)
+        {
+            if (scenes == null)
+            {
+                return;
+            }
+
+            contacts.RemoveGroup(group.Id);
+            scenes.RemoveStatic(group);
+        }
+
+        public override PhysicsBody AddBody(Scene scene, in BodyDesc body) => Begun().AddBody(IdOf(scene), body);
+
+        public override PhysicsBody2D AddBody2D(Scene scene, in BodyDesc2D body) => Begun().AddBody2D(IdOf(scene), body);
+
+        public override void RemoveBody(PhysicsBody body) => scenes?.RemoveBody(body);
+
+        public override void RemoveBody2D(PhysicsBody2D body) => scenes?.RemoveBody2D(body);
+
         internal void WriteBack(IPhysicsSimulation world)
         {
             foreach (KeyValuePair<NetworkObject, Bound> entry in bound)
@@ -426,6 +497,17 @@ namespace Fomoxa.Unity.Rapier
             contacts.RemoveBody(networkObject);
             scenes.RemoveBodies(networkObject);
             found.Restore(networkObject);
+        }
+
+        private RapierScenes Begun()
+        {
+            if (scenes == null)
+            {
+                throw new InvalidOperationException("this RapierPhysics has not begun; start its NetworkManager first");
+            }
+
+            SyncScenes();
+            return scenes;
         }
 
         private static bool Has(IEnumerable<uint> sceneIds, uint sceneId)

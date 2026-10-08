@@ -206,6 +206,63 @@ namespace Fomoxa.Unity.Rapier.Tests
         }
 
         [Test]
+        public void ABlockAddedAtRuntimeHoldsABallAndItsTriggerSeesTheBallUntilTheBlockIsRemoved()
+        {
+            NetworkObject ballPrefab = Prefab("Ball2D", BallPrefabId, ball =>
+            {
+                ball.AddComponent<CircleCollider2D>().radius = 0.25f;
+                ball.AddComponent<Rigidbody2D>();
+            });
+            NetworkManager server = Manager(ballPrefab);
+            UseActiveScene(server);
+            server.ServerManager.StartConnection(1);
+            var physics = server.GetComponent<RapierPhysics>();
+            var block = new GameObject("Block");
+            created.Add(block);
+            var floor = new GameObject("Floor");
+            floor.transform.SetParent(block.transform, false);
+            floor.transform.localPosition = new Vector3(0f, -0.5f, 0f);
+            floor.AddComponent<BoxCollider2D>().size = new Vector2(10f, 1f);
+            var zone = new GameObject("Zone");
+            zone.transform.SetParent(block.transform, false);
+            zone.transform.localPosition = new Vector3(0f, 2f, 0f);
+            var zoneBox = zone.AddComponent<BoxCollider2D>();
+            zoneBox.size = Vector2.one;
+            zoneBox.isTrigger = true;
+            var trigger = Enable(zone.AddComponent<NetworkTrigger2D>());
+            var events = new List<string>();
+            trigger.OnEnter += other => events.Add("enter " + other.name);
+            trigger.OnExit += other => events.Add("exit " + other.name);
+
+            StaticGroup group = physics.AddStatic2D(block);
+            NetworkObject ball = Spawn(server, ballPrefab, new Vector3(0f, 4f, 0f));
+            RunFrames(180);
+
+            Assert.AreEqual((ArenaSceneId, 0, 2), (group.SceneId, group.FirstIndex, group.Count));
+            Assert.AreEqual(0.25f, ball.transform.position.y, 0.05f);
+            Assert.IsTrue(trigger.IsAttached);
+            CollectionAssert.AreEqual(new[] { "enter Ball2D(Clone)", "exit Ball2D(Clone)" }, events);
+
+            physics.RemoveStatic(group);
+            RunFrames(60);
+
+            Assert.IsFalse(trigger.IsAttached);
+            Assert.Less(ball.transform.position.y, -1f);
+        }
+
+        [Test]
+        public void UnownedBodiesAndGroupsNeedAPhysicsThatHasBegun()
+        {
+            var holder = new GameObject("Unbegun");
+            created.Add(holder);
+            var physics = holder.AddComponent<RapierPhysics>();
+
+            Assert.Throws<InvalidOperationException>(() => physics.AddStatic2D(SceneManager.GetActiveScene(), Array.Empty<ColliderDesc2D>()));
+            Assert.Throws<InvalidOperationException>(() => physics.AddBody2D(SceneManager.GetActiveScene(), new BodyDesc2D(BodyKind.Kinematic, BodyShape2D.Circle(1f), System.Numerics.Vector2.Zero, 0f, 0f)));
+            Assert.DoesNotThrow(() => physics.RemoveStatic(default));
+        }
+
+        [Test]
         public void AClientProxyWithATriggerTouchesTheStaticGeometryOfItsOwnWorld()
         {
             Static("Wall", new Vector3(0f, 4f, 0f), new Vector3(2f, 2f, 2f), false);
