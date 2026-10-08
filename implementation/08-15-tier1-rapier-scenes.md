@@ -1,4 +1,4 @@
-# 08.15 — Tier 1: `RapierScenes` and the contact sets of a world
+# 08.15 Tier 1: `RapierScenes` and the contact sets of a world
 
 > The part of sub-step 08.15 that does not reference `UnityEngine`. The plan and the contract are in the section "Hợp đồng đề xuất của 08.15: nguồn tập chạm" (proposed contract of 08.15: contact source) of `implementation/08-prediction-physics.md` in the `unity` repository. The listings of the contact code in the crate (`contact.rs` and the `touching` functions of `world3d.rs` and `world2d.rs`) are in [`08-13-tier1-rapier-3d.md`](08-13-tier1-rapier-3d.md) and [`08-14-tier1-rapier-2d.md`](08-14-tier1-rapier-2d.md). Tests: `dotnet test` 33/33 on Linux (.NET 8) and Windows (.NET 9).
 
@@ -10,7 +10,7 @@
 | 4 | `EntityOf` and `TryGetBody` for the Unity part | ✅ |
 | 5 | dotnet tests, including a console server with a console client | ✅ |
 
-**Rules:** P27 (Q163 (5) A, (7) A; Q165 (3) A, (4) A; Q166 (1) A, (2) A).
+Rules: P27 (Q163 (5) A, (7) A; Q165 (3) A, (4) A; Q166 (1) A, (2) A).
 
 ---
 

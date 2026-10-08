@@ -1,4 +1,4 @@
-# 08.17 — Tier 1: static groups, unowned bodies and body motion in the crate and `RapierScenes`
+# 08.17 Tier 1: static groups, unowned bodies and body motion in the crate and `RapierScenes`
 
 > The tier 1 part of sub-step 08.17 in this repository; the plan and the contract are in the section "Kế hoạch đề xuất của 08.17, 08.18" (proposed plan of 08.17 and 08.18) of `implementation/08-prediction-physics.md` in the `unity` repository, and the Core types (`StaticGroup`, `BodyMotion`, `BodyMotion2D`, the new members of `IPhysicsScenes`) are described in its `implementation/08-17-tier1-runtime-statics.md`. Built and run on a copy of both repositories (`prototypes/0817-api`): `dotnet test` 41/41 on Linux (.NET 8) and Windows (.NET 9); the two-sided check passes with the Linux and the Windows server. Applied to the repository: the libraries were rebuilt there (the Linux library is byte for byte the prototype's, the Windows one differs only as a new build); `dotnet test` 41/41 on Linux and Windows; Unity EditMode 9/9; the two-sided check passes with both servers.
 
@@ -12,7 +12,7 @@
 | 6 | Libraries rebuilt (Linux x64, Windows x64) | ✅ |
 | 7 | `dotnet` tests | ✅ |
 
-**Rules:** P27 (Q167 (1) A, (2) A, (4) A; Q168 (1) A, (2) A).
+Rules: P27 (Q167 (1) A, (2) A, (4) A; Q168 (1) A, (2) A).
 
 ---
 

@@ -1,4 +1,4 @@
-# 08.13 — Tier 1: the Rapier 3D crate and `RapierWorld`
+# 08.13 Tier 1: the Rapier 3D crate and `RapierWorld`
 
 > Sub-step 08.13; the plan is in the 8b section of `implementation/08-prediction-physics.md` in the `unity` repository. The listings show the current code of the repository, so they include the 2D part (08.14) of the shared files and the contact part (08.15) of `world3d.rs` and `RapierWorld`. Tests: `dotnet test` 33/33 on Linux (.NET 8) and Windows (.NET 9).
 
@@ -11,7 +11,7 @@
 | 5 | `Tools/build-rapier.sh` (Linux x64, Windows x64 through `cargo.exe`); libraries in `Runtime/Plugins` | ✅ |
 | 6 | dotnet tests; snapshot cost measurement | ✅ |
 
-**Rules:** P27 (Q163 (1) A, (2) C, (3) A, (7) A; Q164 (1) A; Q165 (1) A, (2) A).
+Rules: P27 (Q163 (1) A, (2) C, (3) A, (7) A; Q164 (1) A; Q165 (1) A, (2) A).
 
 ---
 

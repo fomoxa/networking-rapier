@@ -1,4 +1,4 @@
-# 08.17 — Tier 2: static groups and unowned bodies in `RapierPhysics`
+# 08.17 Tier 2: static groups and unowned bodies in `RapierPhysics`
 
 > The Unity part of sub-step 08.17 in this repository; the plan and the contract are in `implementation/08-prediction-physics.md` of the `unity` repository, and the Unity side of the Core (`NetworkPhysics`, `BodyDescriptions`) is in its `implementation/08-17-tier2-runtime-statics.md`. Tier 1: [`08-17-tier1-rapier-statics.md`](08-17-tier1-rapier-statics.md). Built and run on a copy of both repositories: Unity EditMode 9/9 on Unity 6000.5.7f1 (Windows), one more test skipped because it is the two-sided check; the two-sided check passes with the Linux and the Windows server.
 
@@ -9,7 +9,7 @@
 | 3 | Two-sided check: the ball has the same motion on both sides | ✅ |
 | 4 | Unity tests | ✅ |
 
-**Rules:** P27 (Q166 (3) A; Q167 (1) A, (2) A; Q168 (1) A, (2) A).
+Rules: P27 (Q166 (3) A; Q167 (1) A, (2) A; Q168 (1) A, (2) A).
 
 ---
 

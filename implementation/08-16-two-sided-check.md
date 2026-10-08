@@ -1,4 +1,4 @@
-# 08.16 — Two-sided check: a Rapier console server with a Rapier Unity client
+# 08.16 Two-sided check: a Rapier console server with a Rapier Unity client
 
 > Sub-step 08.16; the plan is in the section "Kế hoạch đề xuất của 08.16: kiểm hai phía" (proposed plan of 08.16: two-sided check) of `implementation/08-prediction-physics.md` in the `unity` repository, and the results are also recorded in its 08.16 section. This is the first time a console server runs with a Unity client; 10.9 only checked a console server with a console client.
 
@@ -10,7 +10,7 @@
 | 4 | `Tools/two-sided-check.sh` (`linux`, `windows`), comparison of the two records | ✅ |
 | 5 | Runs on two combinations: Linux and Windows servers, Windows Unity client | ✅ |
 
-**Rules:** P27 (Q163 (1) A, (3) A, (5) A).
+Rules: P27 (Q163 (1) A, (3) A, (5) A).
 
 ---
 

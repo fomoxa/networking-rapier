@@ -2,7 +2,7 @@
 
 This repository holds the Rapier physics backend of `com.fomoxa.networking`. The Unity package `com.fomoxa.networking.rapier` calls the FFI crate `fomoxa-rapier`, which is built on `rapier3d` and `rapier2d` 0.36.0 with the `enhanced-determinism` feature. Native libraries for Windows x64 and Linux x64 are committed together with the source. The repository also has the tests and a two-sided check between a console server and a Unity client.
 
-The backend is optional, so it lives in its own repository (Q163 (2) C). The Core does not know about Rapier, and a Rapier fix only needs a new release of this package. The design is in the `unity` repository (`design/principles.md` P27, `design/open-questions.md` Q163 – Q166). The implementation notes are in [`implementation/`](implementation/README.md), and usage is described in the [package README](com.fomoxa.networking.rapier/README.md).
+The backend is optional, so it lives in its own repository (Q163 (2) C). The Core does not know about Rapier, and a Rapier fix only needs a new release of this package. The design is in the `unity` repository (`design/principles.md` P27, `design/open-questions.md` Q163 to Q166). The implementation notes are in [`implementation/`](implementation/README.md), and usage is described in the [package README](com.fomoxa.networking.rapier/README.md).
 
 ```
 Unity game / console server
@@ -23,7 +23,7 @@ tests/                           dotnet tests of the tier 1 part
 test-project/                    Unity project that runs the package tests
 checks/two-sided/                console server of the two-sided check
 Tools/                           library builds, Unity tests on Windows, two-sided check, third-party notices
-implementation/                  implementation notes for steps 08.13 – 08.16
+implementation/                  implementation notes for steps 08.13 to 08.17
 ```
 
 ## Development dependencies

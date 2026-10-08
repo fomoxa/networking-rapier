@@ -1,4 +1,4 @@
-# 08.15 — Tier 2: `RapierPhysics` and the contact source in Unity
+# 08.15 Tier 2: `RapierPhysics` and the contact source in Unity
 
 > The Unity part of the package in sub-step 08.15; the plan and the contract are in the 8b section of `implementation/08-prediction-physics.md` in the `unity` repository. The plug-in point in `Fomoxa.Unity` (`IContactQuery`, `Attach`, `Detach`, `TryDescribe*` with `sources`, `StaticColliders*`) is done in the `unity` repository and described in its `implementation/08-15-tier2-contact-attach.md`. Tests: Unity EditMode 7/7 on Unity 6000.5.7f1 (Windows); one more test is skipped because it is the two-sided check of 08.16.
 
@@ -11,7 +11,7 @@
 | 5 | Contact source: a tracker per world, component takeover, Rapier colliders mapped back to `Collider`/`Collider2D` | ✅ |
 | 6 | Per-platform `.meta` files of the libraries; Unity test project; `Tools/unity-windows-check.sh` | ✅ |
 
-**Rules:** P27 (Q163 (5) A; Q164 (3) A, (4.1) A, (4.2) A; Q165 (4) A; Q166 (1) A, (2) A, (3) A).
+Rules: P27 (Q163 (5) A; Q164 (3) A, (4.1) A, (4.2) A; Q165 (4) A; Q166 (1) A, (2) A, (3) A).
 
 ---
 

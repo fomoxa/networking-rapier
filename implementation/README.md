@@ -1,6 +1,6 @@
 # Rapier backend implementation (8b)
 
-This folder holds the implementation notes of the 8b sub-steps done in the `networking-rapier` repository. The design is in the `unity` repository, in `design/principles.md` P27 (section "Server console và 8b", console server and 8b) and `design/open-questions.md` Q163 – Q166. The plan and the contract of each sub-step are in the 8b section of `implementation/08-prediction-physics.md` in the `unity` repository.
+This folder holds the implementation notes of the 8b sub-steps done in the `networking-rapier` repository. The design is in the `unity` repository, in `design/principles.md` P27 (section "Server console và 8b", console server and 8b) and `design/open-questions.md` Q163 to Q166. The plan and the contract of each sub-step are in the 8b section of `implementation/08-prediction-physics.md` in the `unity` repository.
 
 The order of authority is the same as in the `unity` repository: `design/` of the `unity` repository, then the 8b plan in its `implementation/`, then the files in this folder, then the code.
 
@@ -17,7 +17,7 @@ The order of authority is the same as in the `unity` repository: `design/` of th
 | 08.17 | Unity part: the new members of `RapierPhysics`, contact components of static groups | [`08-17-tier2-rapier-unity.md`](08-17-tier2-rapier-unity.md) | ✅ |
 | — | CI | — | not yet: how CI gets the Core is not decided |
 
-The part shared by every backend (the public physics interface, `NetworkPhysics`, body colliders, the collider converter, scene files, console backend physics, the contact source plug-in point) is done in the `unity` repository, in steps 08.8 – 08.12 and the `Fomoxa.Unity` part of 08.15.
+The part shared by every backend (the public physics interface, `NetworkPhysics`, body colliders, the collider converter, scene files, console backend physics, the contact source plug-in point) is done in the `unity` repository, in steps 08.8 to 08.12 and the `Fomoxa.Unity` part of 08.15.
 
 ## Layout
 

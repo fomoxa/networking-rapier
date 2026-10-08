@@ -1,4 +1,4 @@
-# 08.14 — Tier 1: the Rapier 2D world and `RapierWorld2D`
+# 08.14 Tier 1: the Rapier 2D world and `RapierWorld2D`
 
 > Sub-step 08.14; the plan is in the 8b section of `implementation/08-prediction-physics.md` in the `unity` repository. The 2D part shares the crate, `lib.rs`, `hash.rs`, `contact.rs` and `RapierNative.cs` with 08.13; the listings of those files are in [`08-13-tier1-rapier-3d.md`](08-13-tier1-rapier-3d.md). The listings in this file show the current code, so they include the contact part (08.15). Tests: `dotnet test` 33/33 on Linux (.NET 8) and Windows (.NET 9).
 
@@ -9,7 +9,7 @@
 | 3 | `RapierWorld2D : IPhysicsWorld2D` | ✅ |
 | 4 | dotnet tests, 2D determinism hash | ✅ |
 
-**Rules:** P27 (Q163 (4) A, (7) A; Q165 (1) A).
+Rules: P27 (Q163 (4) A, (7) A; Q165 (1) A).
 
 ---
 
