@@ -45,7 +45,9 @@ implementation/                  implementation notes for steps 08.13 to 08.17
 
 CI (`.github/workflows/ci.yml`) runs the dotnet tests on Linux on every push and pull request. It checks out the public [`fomoxa/com.fomoxa.networking`](https://github.com/fomoxa/com.fomoxa.networking) at the commit in `CORE_COMMIT` and passes it with `-p:Unity`, so a change in the Core reaches CI only when that commit is moved on purpose. Move it when this package starts using a newer Core.
 
-The native libraries are built by hand and committed; CI tests the committed Linux library and does not build or release them. After changing the crate, rebuild both platforms, then run the tests on both platforms and the two-sided check.
+The native libraries are built by hand and committed; CI tests the committed Linux library and does not build or release them.
+
+The crate defines the single-precision math functions that Rapier and parry call (`acosf`, `atan2f`, `cosf`, `sinf`, `sincosf`, `expf`, `log2f`, `powf`) in `src/math.rs`, on top of the `libm` crate, and on Linux links with `-Bsymbolic-functions` so the library calls its own copies. The Linux and Windows libraries therefore compute these functions the same way, and the Linux library needs no newer glibc than 2.34 even when it is built on a newer system. Check with `objdump -T` that a rebuilt `.so` imports no math function and no `GLIBC` version above 2.34. After changing the crate, rebuild both platforms, then run the tests on both platforms and the two-sided check.
 
 ## License
 

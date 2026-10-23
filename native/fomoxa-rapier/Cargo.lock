@@ -100,6 +100,7 @@ name = "fomoxa-rapier"
 version = "0.1.0"
 dependencies = [
  "bincode",
+ "libm",
  "rapier2d",
  "rapier3d",
  "serde",

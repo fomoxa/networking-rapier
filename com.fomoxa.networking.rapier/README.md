@@ -7,7 +7,7 @@
 | Version | 0.1.0 |
 | Requires | `com.fomoxa.networking` 0.1.0 |
 | Unity | 6000.5 or later |
-| Platforms | Windows x64, Linux x64 (Editor, players, console servers) |
+| Platforms | Windows x64, Linux x64 with glibc 2.34 or newer (Editor, players, console servers) |
 | Rapier | `rapier3d` and `rapier2d` 0.36.0 with `enhanced-determinism` |
 | License | Apache-2.0 (Rapier and the other linked crates: see `Third Party Notices.md`) |
 
