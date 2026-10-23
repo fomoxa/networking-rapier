@@ -28,7 +28,7 @@ implementation/                  implementation notes for steps 08.13 to 08.17
 
 ## Development dependencies
 
-- The `unity` repository cloned next to this one (`../unity`). The dotnet tests, the Unity project and the two-sided server take the Core from `../unity/com.fomoxa.networking`. There is no CI yet, because how CI gets the Core has not been decided.
+- The `unity` repository cloned next to this one (`../unity`). The dotnet tests, the Unity project and the two-sided server take the Core from `../unity/com.fomoxa.networking`. The dotnet tests take another Core with `-p:Unity=<path to com.fomoxa.networking>`.
 - Rust (stable) for the Linux build, and the Windows `cargo.exe` for the Windows build from WSL.
 - .NET SDK 8 on Linux, and .NET SDK 9 on Windows for the two-sided server.
 - Unity 6000.5.7f1 on Windows for the Unity tests and the two-sided check.
@@ -43,7 +43,9 @@ implementation/                  implementation notes for steps 08.13 to 08.17
 | Two-sided check | `Tools/two-sided-check.sh linux`, `Tools/two-sided-check.sh windows` |
 | Third-party notices | `python3 Tools/third-party-notices.py` |
 
-The native libraries are built by hand and committed; there is no CI that builds or releases them. After changing the crate, rebuild both platforms, then run the tests on both platforms and the two-sided check.
+CI (`.github/workflows/ci.yml`) runs the dotnet tests on Linux on every push and pull request. It checks out the public [`fomoxa/com.fomoxa.networking`](https://github.com/fomoxa/com.fomoxa.networking) at the commit in `CORE_COMMIT` and passes it with `-p:Unity`, so a change in the Core reaches CI only when that commit is moved on purpose. Move it when this package starts using a newer Core.
+
+The native libraries are built by hand and committed; CI tests the committed Linux library and does not build or release them. After changing the crate, rebuild both platforms, then run the tests on both platforms and the two-sided check.
 
 ## License
 

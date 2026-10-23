@@ -7,7 +7,7 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <IsPackable>false</IsPackable>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
-    <Unity>../../unity/com.fomoxa.networking</Unity>
+    <Unity Condition="'$(Unity)' == ''">../../unity/com.fomoxa.networking</Unity>
     <Package>../com.fomoxa.networking.rapier</Package>
   </PropertyGroup>
 

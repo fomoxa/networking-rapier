@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  CORE_REPOSITORY: fomoxa/com.fomoxa.networking
+  CORE_COMMIT: e9899289069a5eb1adf32ec9b56186228f015d7f
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.CORE_REPOSITORY }}
+          ref: ${{ env.CORE_COMMIT }}
+          path: core
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: dotnet tests
+        run: dotnet test tests/Fomoxa.Networking.Rapier.Tests.csproj -c Release -p:Unity=${{ github.workspace }}/core
