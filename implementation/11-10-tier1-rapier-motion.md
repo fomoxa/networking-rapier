@@ -579,7 +579,26 @@ Each mutation changes one place, rebuilds the Linux library when the crate chang
 
 The first run of C1 to C5 used a library still built from R7, because the script rebuilt the library only at the end; the 2D world test failed in each of them as well. The script now rebuilds after undoing each crate mutation, and the table shows the second run.
 
-## 4. Results
+## 4. Cost
+
+A console benchmark outside the repository (`prototypes/11-10-bench`, not committed) is the room benchmark of the `unity` repository with a Rapier body on every crate: a server with `RapierScenes`, one global scene with a ground, 20 crates and 2 peers per room, crates of a room in a group, state marked dirty. The crates rest for 240 ticks, then 300 ticks are measured. A moving crate is moved by 0.1 along x, back and forth, through `Position` before every tick. Three builds:
+
+- before: this repository at `5cc0a34` with the Core at `71c5041`, the crate's pose read through an `ITransformSource` every tick;
+- after, source: this step, the same `ITransformSource` read every tick, which isolates the cost of collecting moved bodies;
+- after, entity: this step, `SyncTransform(sync, receiver)`, read on signals.
+
+Linux, .NET 8, ms per server tick, mean of two runs:
+
+| Rooms | Moving | Before | After, source | After, entity |
+|---:|---:|---:|---:|---:|
+| 500 | 0 % | 5.9 | 5.7 | 1.0 |
+| 500 | 10 % | 10.1 | 10.3 | 5.1 |
+| 2 000 | 0 % | 28.9 | 28.7 | 5.1 |
+| 2 000 | 10 % | 49.1 | 49.4 | 28.2 |
+
+The builds ran interleaved. The two runs of one case differ by up to 25 %, alike for every build; within one run, before and after, source, differ by at most 6 % either way, so collecting moved bodies costs nothing measurable. Read on signals, a tick at 2 000 rooms takes 82 % less time with every crate at rest and 43 % less with 10 % moving.
+
+## 5. Results
 
 - Libraries rebuilt from the crate: Linux x64 (`Tools/build-rapier.sh linux`) and Windows x64 (`Tools/build-rapier.sh windows`).
 - `dotnet test tests/`: 46/46 on Linux (.NET 8) and Windows (.NET 9, `dotnet.exe` on a copy with `net9.0`).

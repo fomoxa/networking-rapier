@@ -33,7 +33,7 @@ Rules: P16 (Q176 C as corrected, Q178 (2) A, Q179 (1) C, (2) C).
 
 The comparisons are exact (`Equals`): `WriteBack` writing the same body pose under the same parent gives the same local pose, so a resting object is never reported (the tests check that the client receives nothing for 30 frames at rest). The first call that sees an object only records the values. A body that moved changes its local pose too and is reported by the scenes as well; the Core ignores repeats.
 
-The order within a tick is: step and `WriteBack`, tick handlers, `CollectMoved`, `SyncTransforms`. A change made in a tick handler is sent in that tick, as with per-tick reads (test `AZChangedInATickHandlerIsSentInThatTick`). The comparisons sat in `WriteBack` in a first version, which already reads z and writes every bound object; a change made in a tick handler, after `WriteBack`, then reached the client one tick late. Comparing in `CollectMoved` costs a second pass over the bound objects each tick, which reads the parent, the z of 2D objects and the local pose of objects under a parent, and writes nothing.
+The order within a tick is: step and `WriteBack`, tick handlers, `CollectMoved`, `SyncTransforms`. A change made in a tick handler is sent in that tick, as with per-tick reads (test `AZChangedInATickHandlerIsSentInThatTick`). The comparisons sat in `WriteBack` in a first version, which already reads z and writes every bound object; a change made in a tick handler, after `WriteBack`, then reached the client one tick late. Comparing in `CollectMoved` costs a second pass over the bound objects each tick, which reads the parent, the z of 2D objects and the local pose of objects under a parent, and writes nothing. `Bind` keeps the object's `Transform` in `Bound`, so the pass does not ask each `NetworkObject` for it; §4 has the measured cost.
 
 A position set on the `Transform` of a bound object by game code is overwritten at the next step, with or without this change: the pose that the Core reads is the body's, apart from the parts above.
 
@@ -63,7 +63,7 @@ After `HistoryOf`:
                     continue;
                 }
 
-                Transform target = entry.Key.transform;
+                Transform target = found.Transform;
                 Transform parent = target.parent;
                 bool shifted = found.Seen && !ReferenceEquals(parent, found.SeenParent);
                 if (found.Body2D.IsValid)
@@ -91,9 +91,16 @@ After `HistoryOf`:
         }
 ```
 
+`Bind` creates the record with the `Transform`:
+
+```csharp
+            found = new Bound { Transform = networkObject.transform };
+```
+
 `Bound`, after `IsProxy`:
 
 ```csharp
+            public Transform Transform;
             public bool Seen;
             public float SeenZ;
             public Transform SeenParent;
@@ -289,7 +296,24 @@ Each mutation changes one place, runs the tests of `RapierPhysicsTest` through `
 
 U2 changes `NetworkTransform` and U7 changes `NetworkRuntime` (the order of U7 is the one of the first version) in the copy of the Core; the others change `RapierPhysics`. `AZChangedInATickHandlerIsSentInThatTick` passes under U1 and U2 because per-tick reads also send the change in that tick.
 
-## 4. Results
+## 4. Cost
+
+An EditMode test outside the repository (`prototypes/11-10-bench`, not committed) builds a server and one client with `RapierPhysics`, spawns 2 000 balls with a `NetworkTransform` on a ground, lets them rest for 240 frames, then measures 600 frames of the server (`RunFrameStart` and `RunFrameEnd`). With 10 % moving, the first 200 balls get a new body position before every tick. The same test ran on the repository before this step (`5cc0a34` with the Core at `71c5041`) and after it. Unity 6000.5.7f1 on Windows, Mono, ms per server frame, mean of two runs:
+
+| Case | Before | After |
+|---|---:|---:|
+| 3D, at rest | 3.18 | 2.85 |
+| 3D, 10 % moving | 3.77 | 3.57 |
+| 3D under a parent, at rest | 3.25 | 3.30 |
+| 3D under a parent, 10 % moving | 4.24 | 4.29 |
+| 2D, at rest | 3.23 | 2.97 |
+| 2D, 10 % moving | 3.39 | 3.28 |
+
+The runs of one case differ by up to 0.4 ms, so only 3D at rest (about −10 %) and 2D at rest (about −8 %) are clear. The rest of the frame is mostly outside transform reads; `WriteBack` writes the pose of every bound body after every step, resting or not.
+
+`CollectMoved` called 1 000 times after the measured frames, per call for 2 000 objects: the pass over bound objects takes 0.22 ms for 3D objects, 0.37 ms for 3D objects under a parent and 0.37 ms for 2D objects; the scenes' part takes 0.5 µs at rest and 16 µs with 200 bodies moving. Before `Bound` kept the `Transform`, the pass took 0.33, 0.49 and 0.49 ms, and the frames of 3D at rest and 2D at rest were 2.84 and 3.14 ms. This pass costs about as much as the reads of `NetworkTransform` that the signals remove, so in Unity the gain is small; on a console server with `RapierScenes` it is large (`11-10-tier1-rapier-motion.md` §4).
+
+## 5. Results
 
 - Unity EditMode with the Core of the `unity` repository: 13/13, the two-sided test skipped.
 - Mutation check: 7/7 caught.

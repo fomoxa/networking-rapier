@@ -137,7 +137,7 @@ namespace Fomoxa.Unity.Rapier
                     continue;
                 }
 
-                Transform target = entry.Key.transform;
+                Transform target = found.Transform;
                 Transform parent = target.parent;
                 bool shifted = found.Seen && !ReferenceEquals(parent, found.SeenParent);
                 if (found.Body2D.IsValid)
@@ -487,7 +487,7 @@ namespace Fomoxa.Unity.Rapier
                 return found;
             }
 
-            found = new Bound();
+            found = new Bound { Transform = networkObject.transform };
             bound.Add(networkObject, found);
             var sources = new List<Collider>();
             var sources2D = new List<Collider2D>();
@@ -594,6 +594,7 @@ namespace Fomoxa.Unity.Rapier
             public Rigidbody2D Rigidbody2D;
             public RigidbodyType2D BodyType2D;
             public bool IsProxy;
+            public Transform Transform;
             public bool Seen;
             public float SeenZ;
             public Transform SeenParent;
