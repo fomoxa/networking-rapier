@@ -145,6 +145,12 @@ namespace Fomoxa.Networking.Rapier
         internal static extern uint fr_world_overlap(IntPtr world, float x, float y, float z, float radius, uint[] bodies, uint capacity);
 
         [DllImport(Library)]
+        internal static extern uint fr_world_moved(IntPtr world);
+
+        [DllImport(Library)]
+        internal static extern uint fr_world_moved_copy(IntPtr world, uint[] bodies, uint capacity);
+
+        [DllImport(Library)]
         internal static extern uint fr_world_snapshot(IntPtr world);
 
         [DllImport(Library)]
@@ -271,6 +277,12 @@ namespace Fomoxa.Networking.Rapier
 
         [DllImport(Library)]
         internal static extern uint fr2_world_overlap(IntPtr world, float x, float y, float radius, uint[] bodies, uint capacity);
+
+        [DllImport(Library)]
+        internal static extern uint fr2_world_moved(IntPtr world);
+
+        [DllImport(Library)]
+        internal static extern uint fr2_world_moved_copy(IntPtr world, uint[] bodies, uint capacity);
 
         [DllImport(Library)]
         internal static extern uint fr2_world_snapshot(IntPtr world);

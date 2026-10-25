@@ -20,6 +20,7 @@ namespace Fomoxa.Unity.Rapier.Tests
         private const double FrameSeconds = 1.0 / 60;
         private const uint BallPrefabId = 0xBA11;
         private const uint GroundPrefabId = 0x6400;
+        private const uint ScaledBallPrefabId = 0xBA12;
         private const uint ArenaSceneId = 0x77;
 
         private readonly List<GameObject> created = new List<GameObject>();
@@ -89,6 +90,165 @@ namespace Fomoxa.Unity.Rapier.Tests
             server.ReleasePhysicsSimulation();
 
             Assert.IsFalse(ball.GetComponent<Rigidbody>().isKinematic);
+        }
+
+        [Test]
+        public void ARestingBallIsReadOnlyWhileRapierMovesItUnlessItSyncsScale()
+        {
+            NetworkObject ballPrefab = Prefab("Ball", BallPrefabId, ball => { ball.AddComponent<SphereCollider>().radius = 0.5f; ball.AddComponent<Rigidbody>(); ball.AddComponent<NetworkTransform>(); });
+            NetworkObject scaledPrefab = Prefab("ScaledBall", ScaledBallPrefabId, ball =>
+            {
+                ball.AddComponent<SphereCollider>().radius = 0.5f;
+                ball.AddComponent<Rigidbody>();
+                var scaled = new SerializedObject(ball.AddComponent<NetworkTransform>());
+                scaled.FindProperty("syncScale").boolValue = true;
+                scaled.ApplyModifiedPropertiesWithoutUndo();
+            });
+            NetworkObject groundPrefab = Prefab("Ground", GroundPrefabId, ground => ground.AddComponent<BoxCollider>().size = new Vector3(20f, 1f, 20f));
+            NetworkManager server = Manager(ballPrefab, scaledPrefab, groundPrefab);
+            NetworkManager client = Manager(ballPrefab, scaledPrefab, groundPrefab);
+            server.ServerManager.StartConnection(1);
+            client.ClientManager.StartConnection("unused.invalid", 1);
+            RunFrames(30);
+            Spawn(server, groundPrefab, new Vector3(0f, -0.5f, 0f));
+            NetworkObject ball = Spawn(server, ballPrefab, new Vector3(0f, 3f, 0f));
+            NetworkObject scaledBall = Spawn(server, scaledPrefab, new Vector3(4f, 3f, 0f));
+            RunFrames(5);
+            NetworkTransform onClient = ((NetworkObject)client.ClientManager.Spawned[ball.ObjectId]).GetComponent<NetworkTransform>();
+            uint lastTickAfterSpawn = onClient.LastTick;
+            RunFrames(15);
+            bool fallingReadEveryTick = ReadEveryTick(ball);
+            uint lastTickWhileFalling = onClient.LastTick;
+
+            RunFrames(600);
+            bool restingReadEveryTick = ReadEveryTick(ball);
+            float restingGap = Vector3.Distance(ball.transform.position, onClient.transform.position);
+            uint lastTickAtRest = onClient.LastTick;
+            RunFrames(30);
+            uint lastTickStillAtRest = onClient.LastTick;
+            PhysicsBody body = ball.Body;
+            body.Velocity = new System.Numerics.Vector3(3f, 0f, 0f);
+            RunFrames(5);
+
+            Assert.IsFalse(fallingReadEveryTick);
+            Assert.AreEqual(lastTickAfterSpawn + 15, lastTickWhileFalling);
+            Assert.IsFalse(restingReadEveryTick);
+            Assert.IsTrue(ReadEveryTick(scaledBall));
+            Assert.Less(restingGap, 1e-4f);
+            Assert.AreEqual(lastTickAtRest, lastTickStillAtRest);
+            Assert.Greater(ball.transform.position.x, 0.1f);
+            Assert.Greater(onClient.LastTick, lastTickStillAtRest + 2);
+        }
+
+        [Test]
+        public void ARestingBallIsSentWhenItsParentMoves()
+        {
+            NetworkObject ballPrefab = Prefab("Ball", BallPrefabId, ball => { ball.AddComponent<SphereCollider>().radius = 0.5f; ball.AddComponent<Rigidbody>(); ball.AddComponent<NetworkTransform>(); });
+            NetworkObject groundPrefab = Prefab("Ground", GroundPrefabId, ground => ground.AddComponent<BoxCollider>().size = new Vector3(20f, 1f, 20f));
+            NetworkManager server = Manager(ballPrefab, groundPrefab);
+            NetworkManager client = Manager(ballPrefab, groundPrefab);
+            server.ServerManager.StartConnection(1);
+            client.ClientManager.StartConnection("unused.invalid", 1);
+            RunFrames(30);
+            Spawn(server, groundPrefab, new Vector3(0f, -0.5f, 0f));
+            var holder = new GameObject("Holder");
+            created.Add(holder);
+            NetworkObject ball = UnityEngine.Object.Instantiate(ballPrefab, new Vector3(0f, 3f, 0f), Quaternion.identity, holder.transform);
+            created.Add(ball.gameObject);
+            server.ServerManager.Spawn(ball);
+            RunFrames(600);
+            NetworkTransform onClient = ((NetworkObject)client.ClientManager.Spawned[ball.ObjectId]).GetComponent<NetworkTransform>();
+            bool restingReadEveryTick = ReadEveryTick(ball);
+            uint lastTickAtRest = onClient.LastTick;
+            RunFrames(30);
+            uint lastTickStillAtRest = onClient.LastTick;
+
+            holder.transform.position += new Vector3(2f, 0f, 0f);
+            RunFrames(5);
+            float localUnderMovedParent = ball.transform.localPosition.x;
+            float clientUnderMovedParent = onClient.transform.localPosition.x;
+            uint lastTickUnderMovedParent = onClient.LastTick;
+            ball.transform.SetParent(null, true);
+            RunFrames(5);
+
+            Assert.IsFalse(restingReadEveryTick);
+            Assert.AreEqual(lastTickAtRest, lastTickStillAtRest);
+            Assert.Greater(lastTickUnderMovedParent, lastTickStillAtRest);
+            Assert.AreEqual(-2f, localUnderMovedParent, 0.05f);
+            Assert.AreEqual(localUnderMovedParent, clientUnderMovedParent, 1e-4f);
+            Assert.Greater(onClient.LastTick, lastTickUnderMovedParent);
+            Assert.AreEqual(0f, ball.transform.localPosition.x, 0.05f);
+            Assert.AreEqual(ball.transform.localPosition.x, onClient.transform.localPosition.x, 1e-4f);
+        }
+
+        [Test]
+        public void ARestingTwoDimensionalBallIsSentWhenItsZChanges()
+        {
+            NetworkObject ballPrefab = Prefab("Ball2D", BallPrefabId, ball => { ball.AddComponent<CircleCollider2D>().radius = 0.5f; ball.AddComponent<Rigidbody2D>(); ball.AddComponent<NetworkTransform>(); });
+            NetworkObject groundPrefab = Prefab("Ground2D", GroundPrefabId, ground => ground.AddComponent<BoxCollider2D>().size = new Vector2(20f, 1f));
+            NetworkManager server = Manager(ballPrefab, groundPrefab);
+            NetworkManager client = Manager(ballPrefab, groundPrefab);
+            server.ServerManager.StartConnection(1);
+            client.ClientManager.StartConnection("unused.invalid", 1);
+            RunFrames(30);
+            Spawn(server, groundPrefab, new Vector3(0f, -0.5f, 0f));
+            NetworkObject ball = Spawn(server, ballPrefab, new Vector3(0f, 3f, 0f));
+            RunFrames(600);
+            NetworkTransform onClient = ((NetworkObject)client.ClientManager.Spawned[ball.ObjectId]).GetComponent<NetworkTransform>();
+            bool restingReadEveryTick = ReadEveryTick(ball);
+            uint lastTickAtRest = onClient.LastTick;
+            RunFrames(30);
+            uint lastTickStillAtRest = onClient.LastTick;
+
+            Vector3 resting = ball.transform.position;
+            ball.transform.position = new Vector3(resting.x, resting.y, 4f);
+            RunFrames(5);
+
+            Assert.IsFalse(restingReadEveryTick);
+            Assert.AreEqual(lastTickAtRest, lastTickStillAtRest);
+            Assert.AreEqual(4f, ball.transform.position.z);
+            Assert.AreEqual(4f, onClient.transform.position.z, 1e-5f);
+        }
+
+        [Test]
+        public void AZChangedInATickHandlerIsSentInThatTick()
+        {
+            NetworkObject ballPrefab = Prefab("Ball2D", BallPrefabId, ball => { ball.AddComponent<CircleCollider2D>().radius = 0.5f; ball.AddComponent<Rigidbody2D>(); ball.AddComponent<NetworkTransform>(); });
+            NetworkObject groundPrefab = Prefab("Ground2D", GroundPrefabId, ground => ground.AddComponent<BoxCollider2D>().size = new Vector2(20f, 1f));
+            NetworkManager server = Manager(ballPrefab, groundPrefab);
+            NetworkManager client = Manager(ballPrefab, groundPrefab);
+            server.ServerManager.StartConnection(1);
+            client.ClientManager.StartConnection("unused.invalid", 1);
+            RunFrames(30);
+            Spawn(server, groundPrefab, new Vector3(0f, -0.5f, 0f));
+            NetworkObject ball = Spawn(server, ballPrefab, new Vector3(0f, 3f, 0f));
+            RunFrames(600);
+            NetworkTransform onClient = ((NetworkObject)client.ClientManager.Spawned[ball.ObjectId]).GetComponent<NetworkTransform>();
+            uint lastTickAtRest = onClient.LastTick;
+            uint changedAt = 0;
+            Action change = () =>
+            {
+                if (changedAt == 0)
+                {
+                    changedAt = server.TimeManager.Tick;
+                    Vector3 resting = ball.transform.position;
+                    ball.transform.position = new Vector3(resting.x, resting.y, 4f);
+                }
+            };
+            server.TimeManager.OnTick += change;
+            uint firstReceived = lastTickAtRest;
+            for (int frame = 0; frame < 5 && firstReceived == lastTickAtRest; frame++)
+            {
+                RunFrames(1);
+                firstReceived = onClient.LastTick;
+            }
+
+            server.TimeManager.OnTick -= change;
+            RunFrames(5);
+
+            Assert.AreNotEqual(0u, changedAt);
+            Assert.AreEqual(changedAt, firstReceived);
+            Assert.AreEqual(4f, onClient.transform.position.z, 1e-5f);
         }
 
         [Test]
@@ -331,6 +491,9 @@ namespace Fomoxa.Unity.Rapier.Tests
             physics.SceneIdOf = scene => scene == active ? ArenaSceneId : 0;
             physics.SceneFileOf = sceneId => sceneId == ArenaSceneId ? bytes : null;
         }
+
+        private static bool ReadEveryTick(NetworkObject networkObject) =>
+            typeof(EntityRecord).GetProperty("TransformOrderNode", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(((INetworkEntity)networkObject).Record) != null;
 
         private static List<string> Names(IEnumerable<Collider> colliders)
         {

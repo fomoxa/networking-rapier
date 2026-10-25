@@ -8,7 +8,7 @@ using Fomoxa.Networking.Simulation;
 
 namespace Fomoxa.Networking.Rapier
 {
-    public sealed class RapierScenes : IPhysicsScenes, IDisposable
+    public sealed class RapierScenes : IPhysicsScenes, IPhysicsMotion, IDisposable
     {
         private static readonly Vector3 EarthGravity = new Vector3(0f, -9.81f, 0f);
 
@@ -25,6 +25,8 @@ namespace Fomoxa.Networking.Rapier
         private readonly List<int> leavingStatics = new List<int>();
         private readonly List<UnownedBody> unowned = new List<UnownedBody>();
         private readonly List<UnownedBody2D> unowned2D = new List<UnownedBody2D>();
+        private readonly List<BodyHandle> movedBodies = new List<BodyHandle>();
+        private readonly List<INetworkEntity> released = new List<INetworkEntity>();
         private int nextStatic = 1;
 
         public RapierScenes()
@@ -260,6 +262,42 @@ namespace Fomoxa.Networking.Rapier
                 owners.Remove((part.World, part.Handle));
                 part.World.RemoveBody(part.Handle);
             }
+
+            released.Add(entity);
+        }
+
+        public bool ReportsMotion(INetworkEntity entity)
+        {
+            if (entity == null || !bodies.TryGetValue(entity, out List<Part> parts))
+            {
+                return false;
+            }
+
+            foreach (Part part in parts)
+            {
+                if (!part.World.IsDisposed)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        public void CollectMoved(List<INetworkEntity> into)
+        {
+            foreach (RapierWorld world in worlds.Values)
+            {
+                CollectMoved(world, into);
+            }
+
+            foreach (RapierWorld2D world in worlds2D.Values)
+            {
+                CollectMoved(world, into);
+            }
+
+            into.AddRange(released);
+            released.Clear();
         }
 
         public void WorldsOf(INetworkEntity entity, List<IPhysicsSimulation> into)
@@ -373,6 +411,7 @@ namespace Fomoxa.Networking.Rapier
             statics.Clear();
             unowned.Clear();
             unowned2D.Clear();
+            released.Clear();
         }
 
         private static void Remember(Dictionary<uint, List<uint>> remembered, uint sceneId, List<uint> masks)
@@ -435,14 +474,30 @@ namespace Fomoxa.Networking.Rapier
             leavingStatics.Clear();
         }
 
+        private void CollectMoved(IRapierBodies world, List<INetworkEntity> into)
+        {
+            movedBodies.Clear();
+            world.CollectMoved(movedBodies);
+            foreach (BodyHandle body in movedBodies)
+            {
+                if (owners.TryGetValue((world, body), out INetworkEntity entity))
+                {
+                    into.Add(entity);
+                }
+            }
+
+            movedBodies.Clear();
+        }
+
         private void ForgetOwners(IPhysicsSimulation world)
         {
             forgotten.Clear();
-            foreach ((IPhysicsSimulation World, BodyHandle Body) key in owners.Keys)
+            foreach (KeyValuePair<(IPhysicsSimulation World, BodyHandle Body), INetworkEntity> owner in owners)
             {
-                if (ReferenceEquals(key.World, world))
+                if (ReferenceEquals(owner.Key.World, world))
                 {
-                    forgotten.Add(key);
+                    forgotten.Add(owner.Key);
+                    released.Add(owner.Value);
                 }
             }
 

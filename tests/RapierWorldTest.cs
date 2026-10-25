@@ -399,6 +399,50 @@ namespace Fomoxa.Networking.Rapier.Tests
         }
 
         [Test]
+        public void AFallingBodyIsMovedUntilItSleepsAndAWrittenOrLoadedBodyIsMovedOnce()
+        {
+            using (var world = new RapierWorld(Gravity))
+            {
+                world.AddStatic(new[] { Ground(0) });
+                BodyHandle ball = world.CreateBody(Ball(new Vector3(0f, 2f, 0f), 1f));
+                BodyHandle parked = world.CreateBody(Ball(new Vector3(5f, 0.5f, 0f), 1f));
+                world.SetKind(parked, BodyKind.Kinematic);
+                BodyHandle fixedBody = world.CreateBody(Ball(new Vector3(8f, 0.5f, 0f), 1f));
+                world.SetKind(fixedBody, BodyKind.Static);
+                BodyHandle removed = world.CreateBody(Ball(new Vector3(-5f, 2f, 0f), 1f));
+                PhysicsSnapshot snapshot = world.CreateSnapshot();
+                world.Save(snapshot);
+
+                world.Step(Tick);
+                List<BodyHandle> falling = Moved(world);
+                world.SetBody(removed, new BodyState { Position = new Vector3(-5f, 3f, 0f), Rotation = Quaternion.Identity });
+                world.RemoveBody(removed);
+                List<BodyHandle> afterRemove = Moved(world);
+                Run(world, 600);
+                Moved(world);
+                world.Step(Tick);
+                List<BodyHandle> resting = Moved(world);
+                world.SetBody(parked, new BodyState { Position = new Vector3(5f, 1f, 0f), Rotation = Quaternion.Identity });
+                world.SetBody(fixedBody, new BodyState { Position = new Vector3(8f, 1f, 0f), Rotation = Quaternion.Identity });
+                world.Step(Tick);
+                List<BodyHandle> written = Moved(world);
+                Run(world, 120);
+                Moved(world);
+                world.Step(Tick);
+                List<BodyHandle> asleepAgain = Moved(world);
+                world.Load(snapshot);
+                List<BodyHandle> loaded = Moved(world);
+
+                CollectionAssert.AreEquivalent(new[] { ball, parked, fixedBody, removed }, falling);
+                CollectionAssert.DoesNotContain(afterRemove, removed);
+                CollectionAssert.IsEmpty(resting);
+                CollectionAssert.AreEquivalent(new[] { parked, fixedBody }, written);
+                CollectionAssert.IsEmpty(asleepAgain);
+                CollectionAssert.AreEquivalent(new[] { ball, parked, fixedBody }, loaded);
+            }
+        }
+
+        [Test]
         public void TheMotionOfABodyLocksAxesTurnsGravityOffAndDamps()
         {
             using (var world = new RapierWorld(Gravity))
@@ -442,6 +486,13 @@ namespace Fomoxa.Networking.Rapier.Tests
             }
 
             return world;
+        }
+
+        private static List<BodyHandle> Moved(RapierWorld world)
+        {
+            var moved = new List<BodyHandle>();
+            world.CollectMoved(moved);
+            return moved;
         }
 
         private static void Run(RapierWorld world, int ticks)

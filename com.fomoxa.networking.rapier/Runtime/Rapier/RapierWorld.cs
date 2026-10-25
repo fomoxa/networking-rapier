@@ -11,6 +11,7 @@ namespace Fomoxa.Networking.Rapier
 
         private IntPtr world;
         private uint[] overlapped = new uint[64];
+        private uint[] moved = new uint[64];
         private RapierNative.ColliderRef[] touched = new RapierNative.ColliderRef[16];
 
         public RapierWorld(Vector3 gravity)
@@ -236,6 +237,32 @@ namespace Fomoxa.Networking.Rapier
             }
 
             return count;
+        }
+
+
+        public void CollectMoved(List<BodyHandle> into)
+        {
+            if (into == null)
+            {
+                throw new ArgumentNullException(nameof(into));
+            }
+
+            uint count = RapierNative.fr_world_moved(world);
+            if (count == 0)
+            {
+                return;
+            }
+
+            if (moved.Length < count)
+            {
+                moved = new uint[Math.Max(count, (uint)moved.Length * 2)];
+            }
+
+            count = RapierNative.fr_world_moved_copy(world, moved, count);
+            for (int index = 0; index < (int)count; index++)
+            {
+                into.Add(new BodyHandle((int)moved[index]));
+            }
         }
 
         public void Touching(RapierCollider collider, List<RapierCollider> into)

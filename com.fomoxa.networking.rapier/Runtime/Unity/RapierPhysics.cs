@@ -11,7 +11,7 @@ using UnityEngine.SceneManagement;
 namespace Fomoxa.Unity.Rapier
 {
     [DisallowMultipleComponent]
-    public sealed class RapierPhysics : NetworkPhysics
+    public sealed class RapierPhysics : NetworkPhysics, IPhysicsMotion
     {
         [SerializeField] private Vector3 gravity = new Vector3(0f, -9.81f, 0f);
 
@@ -123,6 +123,46 @@ namespace Fomoxa.Unity.Rapier
         }
 
         public override PhysicsHistory HistoryOf(IPhysicsSimulation world, int capacity) => scenes.HistoryOf(world, capacity);
+
+        public bool ReportsMotion(INetworkEntity entity) => scenes != null && scenes.ReportsMotion(entity);
+
+        public void CollectMoved(List<INetworkEntity> into)
+        {
+            scenes?.CollectMoved(into);
+            foreach (KeyValuePair<NetworkObject, Bound> entry in bound)
+            {
+                Bound found = entry.Value;
+                if (found.IsProxy || entry.Key == null || !found.HasBody)
+                {
+                    continue;
+                }
+
+                Transform target = entry.Key.transform;
+                Transform parent = target.parent;
+                bool shifted = found.Seen && !ReferenceEquals(parent, found.SeenParent);
+                if (found.Body2D.IsValid)
+                {
+                    float z = target.position.z;
+                    shifted |= found.Seen && !z.Equals(found.SeenZ);
+                    found.SeenZ = z;
+                }
+
+                if (parent != null)
+                {
+                    target.GetLocalPositionAndRotation(out Vector3 localPosition, out Quaternion localRotation);
+                    shifted |= found.Seen && (!localPosition.Equals(found.SeenLocalPosition) || !localRotation.Equals(found.SeenLocalRotation));
+                    found.SeenLocalPosition = localPosition;
+                    found.SeenLocalRotation = localRotation;
+                }
+
+                found.SeenParent = parent;
+                found.Seen = true;
+                if (shifted)
+                {
+                    into.Add(entry.Key);
+                }
+            }
+        }
 
         public override void PlaceProxy(NetworkObject networkObject)
         {
@@ -554,6 +594,11 @@ namespace Fomoxa.Unity.Rapier
             public Rigidbody2D Rigidbody2D;
             public RigidbodyType2D BodyType2D;
             public bool IsProxy;
+            public bool Seen;
+            public float SeenZ;
+            public Transform SeenParent;
+            public Vector3 SeenLocalPosition;
+            public Quaternion SeenLocalRotation;
 
             public bool HasBody => Body.IsValid || Body2D.IsValid;
 

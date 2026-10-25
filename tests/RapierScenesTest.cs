@@ -20,6 +20,7 @@ namespace Fomoxa.Networking.Rapier.Tests
         private const uint ArenaSceneId = 0x00A1_E7A0;
         private const uint LobbySceneId = 0x00B0_B000;
         private const uint BallPrefabId = 0x0000_0B01;
+        private const uint SyncedBallPrefabId = 0x0000_0B02;
         private const float Tick = 1f / 60f;
 
         [Test]
@@ -83,6 +84,43 @@ namespace Fomoxa.Networking.Rapier.Tests
                 Assert.IsFalse(other.IsValid);
                 Assert.IsEmpty(stepping);
                 CollectionAssert.IsEmpty(scenes.SceneIds);
+            }
+        }
+
+        [Test]
+        public void MovedBodiesLeadBackToTheirEntitiesAndEntitiesThatLoseTheirBodiesAreReportedOnce()
+        {
+            using (var scenes = new RapierScenes())
+            {
+                scenes.LoadScene(Arena(ArenaSceneId));
+                StandaloneEntity falling = Entity();
+                StandaloneEntity removed = Entity();
+                StandaloneEntity unowned = Entity();
+                StandaloneEntity flat = Entity();
+                scenes.AddBody(falling, ArenaSceneId, Ball(new Vector3(0f, 3f, 0f)));
+                scenes.AddBody2D(flat, ArenaSceneId, new BodyDesc2D(BodyKind.Dynamic, BodyShape2D.Circle(0.5f), new Vector2(0f, 3f), 0f, 1f));
+                scenes.AddBody(falling, ArenaSceneId, Ball(new Vector3(0f, 5f, 0f)));
+                scenes.AddBody(removed, ArenaSceneId, Ball(new Vector3(4f, 3f, 0f)));
+                scenes.AddBody(ArenaSceneId, Ball(new Vector3(-4f, 3f, 0f)));
+
+                Run(scenes, 1);
+                List<INetworkEntity> moving = Moved(scenes);
+                scenes.RemoveBodies(removed);
+                List<INetworkEntity> afterRemove = Moved(scenes);
+                bool removedReports = scenes.ReportsMotion(removed);
+                List<INetworkEntity> onceRemoved = Moved(scenes);
+                bool fallingReportsBeforeUnload = scenes.ReportsMotion(falling);
+                scenes.UnloadScene(ArenaSceneId);
+                List<INetworkEntity> afterUnload = Moved(scenes);
+
+                CollectionAssert.AreEquivalent(new[] { falling, falling, removed, flat }, moving);
+                CollectionAssert.AreEquivalent(new[] { falling, falling, removed, flat }, afterRemove);
+                Assert.IsFalse(removedReports);
+                CollectionAssert.AreEquivalent(new[] { falling, falling, flat }, onceRemoved);
+                Assert.IsTrue(fallingReportsBeforeUnload);
+                Assert.IsFalse(scenes.ReportsMotion(unowned));
+                CollectionAssert.AreEquivalent(new[] { falling, falling, flat }, afterUnload);
+                Assert.IsFalse(scenes.ReportsMotion(falling));
             }
         }
 
@@ -194,6 +232,73 @@ namespace Fomoxa.Networking.Rapier.Tests
                 Assert.IsTrue(onClient.Body.IsValid);
                 Assert.IsTrue(onClient.Body.IsKinematic);
                 CollectionAssert.AreEqual(new[] { ArenaSceneId }, clientPhysics.SceneIds);
+            }
+        }
+
+        [Test]
+        public void AConsoleBallIsNotReadWhileItSleepsAndIsReadAgainOnceItIsPushed()
+        {
+            var files = new SceneFiles();
+            files.Add(Arena(ArenaSceneId));
+            var prefabs = new StandalonePrefabs();
+            var onClient = new List<SyncedBall>();
+            prefabs.Register(SyncedBallPrefabId, 0xBA12, () =>
+            {
+                var created = new SyncedBall();
+                onClient.Add(created);
+                return created;
+            });
+            var logged = new List<Exception>();
+            var log = new NetworkLog(logged.Add, message => { });
+            var settings = new NetworkSettings { PhysicsBackend = PhysicsBackend.Rapier };
+            var factory = new LoopbackFactory();
+            TimeSpan now = TimeSpan.Zero;
+            using (var serverPhysics = new RapierScenes())
+            using (var clientPhysics = new RapierScenes())
+            {
+                NetworkRuntime server = StandaloneRuntime.Create(TestObjects.Registry(), settings, factory, prefabs, new StandaloneBehaviours(), files, () => now, log, serverPhysics);
+                NetworkRuntime client = StandaloneRuntime.Create(TestObjects.Registry(), settings, factory, prefabs, new StandaloneBehaviours(), files, () => now, log, clientPhysics);
+                void Frames(int count)
+                {
+                    for (int frame = 0; frame < count; frame++)
+                    {
+                        now += TimeSpan.FromSeconds(Tick);
+                        server.BeginFrame(now, Tick);
+                        client.BeginFrame(now, Tick);
+                        server.EndFrame();
+                        client.EndFrame();
+                    }
+                }
+
+                server.ServerManager.StartConnection(7777);
+                client.ClientManager.StartConnection("127.0.0.1", 7777);
+                Frames(10);
+                server.ServerManager.Scenes.LoadGlobal(new[] { ArenaSceneId });
+                Frames(10);
+                var ball = new SyncedBall { SceneId = ArenaSceneId, Position = new Vector3(0f, 3f, 0f) };
+                server.ServerManager.Spawn(ball);
+                Frames(20);
+                int whileFalling = Received(onClient).Count;
+                Frames(600);
+                List<TransformSample> received = Received(onClient);
+                int asleep = received.Count;
+                TransformSample settle = received[asleep - 1];
+                Vector3 restingAt = ball.Position;
+                bool trackedAtRest = ball.Record.TransformOrderNode == null;
+                Frames(60);
+                int stillAsleep = received.Count;
+                PhysicsBody body = ball.Body;
+                body.Velocity = new Vector3(3f, 0f, 0f);
+                Frames(10);
+
+                Assert.IsEmpty(logged);
+                Assert.Greater(whileFalling, 1);
+                Assert.IsTrue(settle.Settle);
+                Assert.AreEqual(restingAt, settle.LocalPosition);
+                Assert.IsTrue(trackedAtRest);
+                Assert.AreEqual(asleep, stillAsleep);
+                Assert.Greater(received.Count, stillAsleep + 1);
+                Assert.Greater(received[received.Count - 1].LocalPosition.X, 0.1f);
             }
         }
 
@@ -392,6 +497,13 @@ namespace Fomoxa.Networking.Rapier.Tests
 
         private static StandaloneEntity Entity() => new StandaloneEntity(1, Array.Empty<EntityBehaviour>());
 
+        private static List<INetworkEntity> Moved(RapierScenes scenes)
+        {
+            var moved = new List<INetworkEntity>();
+            scenes.CollectMoved(moved);
+            return moved;
+        }
+
         private static void Run(RapierScenes scenes, int ticks)
         {
             var worlds = new List<IPhysicsSimulation>();
@@ -418,6 +530,118 @@ namespace Fomoxa.Networking.Rapier.Tests
                 body = Ball(Vector3.Zero);
                 return true;
             }
+        }
+
+        [Test]
+        public void AConsoleBallMovedThroughItsBodyInATickHandlerIsSentInThatTick()
+        {
+            var files = new SceneFiles();
+            files.Add(Arena(ArenaSceneId));
+            var prefabs = new StandalonePrefabs();
+            var onClient = new List<SyncedBall>();
+            prefabs.Register(SyncedBallPrefabId, 0xBA12, () =>
+            {
+                var created = new SyncedBall();
+                onClient.Add(created);
+                return created;
+            });
+            var logged = new List<Exception>();
+            var log = new NetworkLog(logged.Add, message => { });
+            var settings = new NetworkSettings { PhysicsBackend = PhysicsBackend.Rapier };
+            var factory = new LoopbackFactory();
+            TimeSpan now = TimeSpan.Zero;
+            using (var serverPhysics = new RapierScenes())
+            using (var clientPhysics = new RapierScenes())
+            {
+                NetworkRuntime server = StandaloneRuntime.Create(TestObjects.Registry(), settings, factory, prefabs, new StandaloneBehaviours(), files, () => now, log, serverPhysics);
+                NetworkRuntime client = StandaloneRuntime.Create(TestObjects.Registry(), settings, factory, prefabs, new StandaloneBehaviours(), files, () => now, log, clientPhysics);
+                void Frames(int count)
+                {
+                    for (int frame = 0; frame < count; frame++)
+                    {
+                        now += TimeSpan.FromSeconds(Tick);
+                        server.BeginFrame(now, Tick);
+                        client.BeginFrame(now, Tick);
+                        server.EndFrame();
+                        client.EndFrame();
+                    }
+                }
+
+                server.ServerManager.StartConnection(7777);
+                client.ClientManager.StartConnection("127.0.0.1", 7777);
+                Frames(10);
+                server.ServerManager.Scenes.LoadGlobal(new[] { ArenaSceneId });
+                Frames(10);
+                var ball = new SyncedBall { SceneId = ArenaSceneId, Position = new Vector3(0f, 3f, 0f) };
+                server.ServerManager.Spawn(ball);
+                Frames(600);
+                List<TransformSample> received = Received(onClient);
+                int asleep = received.Count;
+                Vector3 restingAt = ball.Position;
+                uint movedAt = 0;
+                void Move()
+                {
+                    if (movedAt == 0)
+                    {
+                        movedAt = server.TimeManager.Tick;
+                        PhysicsBody body = ball.Body;
+                        body.Position = restingAt + new Vector3(2f, 0f, 0f);
+                    }
+                }
+
+                server.TimeManager.OnTick += Move;
+                Frames(10);
+                server.TimeManager.OnTick -= Move;
+
+                Assert.IsEmpty(logged);
+                Assert.Greater(received.Count, asleep);
+                Assert.AreEqual(movedAt, received[asleep].Tick);
+                Assert.AreEqual(restingAt.X + 2f, received[asleep].LocalPosition.X, 1e-4f);
+            }
+        }
+
+        private static List<TransformSample> Received(List<SyncedBall> onClient)
+        {
+            Assert.AreEqual(1, onClient.Count);
+            return onClient[0].Pose.Received;
+        }
+
+        private sealed class SyncedBall : StandaloneEntity
+        {
+            public SyncedBall()
+                : this(new PoseReceiver())
+            {
+            }
+
+            private SyncedBall(PoseReceiver pose)
+                : base(SyncedBallPrefabId, new EntityBehaviour[] { pose })
+            {
+                Pose = pose;
+            }
+
+            public PoseReceiver Pose { get; }
+
+            public override bool TryGetBody(out BodyDesc body)
+            {
+                body = Ball(Vector3.Zero);
+                return true;
+            }
+        }
+
+        private sealed class PoseReceiver : EntityBehaviour, ITransformReceiver
+        {
+            public PoseReceiver()
+            {
+                SyncTransform(new TransformSync(new TransformSyncSettings(true, true, false, 0.01f, 0.1f, 0.01f)), this);
+            }
+
+            public List<TransformSample> Received { get; } = new List<TransformSample>();
+
+            public void ResetReceive()
+            {
+            }
+
+            public void Receive(in TransformSample sample) => Received.Add(sample);
         }
 
         private sealed class SceneFiles : ISceneFiles

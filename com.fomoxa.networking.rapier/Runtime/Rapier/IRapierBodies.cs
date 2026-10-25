@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Fomoxa.Networking.Simulation;
 
 namespace Fomoxa.Networking.Rapier
@@ -15,5 +16,7 @@ namespace Fomoxa.Networking.Rapier
         void SetKind(BodyHandle body, BodyKind kind);
 
         void SetRewindable(BodyHandle body, bool rewindable);
+
+        void CollectMoved(List<BodyHandle> into);
     }
 }

@@ -130,6 +130,8 @@ pub struct World2D {
     statics: Vec<StaticSlot>,
     next_group: u32,
     scratch: Vec<u8>,
+    written: BTreeSet<u32>,
+    moved: Vec<u32>,
 }
 
 impl World2D {
@@ -144,6 +146,8 @@ impl World2D {
             statics: Vec::new(),
             next_group: 1,
             scratch: Vec::new(),
+            written: BTreeSet::new(),
+            moved: Vec::new(),
         }
     }
 
@@ -298,6 +302,7 @@ impl World2D {
         match self.body_mut(id) {
             Some(body) => {
                 apply_state(body, state);
+                self.written.insert(id);
                 true
             }
             None => false,
@@ -308,6 +313,7 @@ impl World2D {
         match self.body_mut(id) {
             Some(body) => {
                 body.set_body_type(body_type(kind), true);
+                self.written.insert(id);
                 true
             }
             None => false,
@@ -316,6 +322,15 @@ impl World2D {
 
     fn kind(&self, id: u32) -> Option<u32> {
         self.body(id).map(|body| kind_of(body.body_type()))
+    }
+
+    fn collect_moved(&mut self) -> usize {
+        let mut moved: BTreeSet<u32> = std::mem::take(&mut self.written);
+        for (_, body) in self.physics.active_bodies() {
+            moved.insert(body.user_data as u32);
+        }
+        self.moved = moved.into_iter().filter(|id| self.bodies.contains_key(id)).collect();
+        self.moved.len()
     }
 
     fn snapshot(&mut self) -> usize {
@@ -351,6 +366,8 @@ impl World2D {
         if snapshot.format != SNAPSHOT_FORMAT {
             return false;
         }
+
+        self.written.extend(self.bodies.keys().copied());
 
         let current: BTreeMap<u32, (FrBodyState2D, u32)> = self
             .bodies
@@ -872,6 +889,25 @@ pub unsafe extern "C" fn fr2_collider_touching(world_ptr: *mut World2D, body: u3
         Some(world) => write_refs(&world.touching(body, index), out, capacity),
         None => 0,
     }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fr2_world_moved(world_ptr: *mut World2D) -> u32 {
+    world(world_ptr).map_or(0, |world| world.collect_moved() as u32)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fr2_world_moved_copy(world_ptr: *mut World2D, bodies: *mut u32, capacity: u32) -> u32 {
+    let world = match world(world_ptr) {
+        Some(world) => world,
+        None => return 0,
+    };
+    let count = world.moved.len().min(capacity as usize);
+    if count > 0 && !bodies.is_null() {
+        slice::from_raw_parts_mut(bodies, count).copy_from_slice(&world.moved[..count]);
+    }
+
+    count as u32
 }
 
 #[no_mangle]
