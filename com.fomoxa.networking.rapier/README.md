@@ -4,8 +4,8 @@
 
 | | |
 |---|---|
-| Version | 0.1.0 |
-| Requires | `com.fomoxa.networking` 0.1.0 |
+| Version | 0.1.1 |
+| Requires | `com.fomoxa.networking` 0.2.0 |
 | Unity | 6000.5 or later |
 | Platforms | Windows x64, Linux x64 with glibc 2.34 or newer (Editor, players, console servers) |
 | Rapier | `rapier3d` and `rapier2d` 0.36.0 with `enhanced-determinism` |

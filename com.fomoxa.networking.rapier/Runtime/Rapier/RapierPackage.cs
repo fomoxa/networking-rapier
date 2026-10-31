@@ -4,7 +4,7 @@ namespace Fomoxa.Networking.Rapier
 {
     public static class RapierPackage
     {
-        public const string CoreVersion = "0.1.0";
+        public const string CoreVersion = "0.2.0";
 
         public static void CheckCore()
         {
