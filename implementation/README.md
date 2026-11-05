@@ -18,6 +18,7 @@ The order of authority is the same as in the `unity` repository: `design/` of th
 | 11.10 | Moved bodies: the crate, `RapierWorld*`, `RapierScenes` implement the Core's `IPhysicsMotion` (step 11.10 of the `unity` repository) | [`11-10-tier1-rapier-motion.md`](11-10-tier1-rapier-motion.md) | ✅ |
 | 11.10 | Unity part: `RapierPhysics` forwards `IPhysicsMotion` | [`11-10-tier2-rapier-unity.md`](11-10-tier2-rapier-unity.md) | ✅ |
 | 11.29 | Release 0.1.1 with `com.fomoxa.networking` 0.2.0 | [`11-29-release.md`](11-29-release.md) | ✅ |
+| 12.1 | Libraries for every platform, built in CI, golden hashes | [`12-1-native-platforms.md`](12-1-native-platforms.md) | ✅ |
 | — | CI | — | not yet: how CI gets the Core is not decided |
 
 The part shared by every backend (the public physics interface, `NetworkPhysics`, body colliders, the collider converter, scene files, console backend physics, the contact source plug-in point) is done in the `unity` repository, in steps 08.8 to 08.12 and the `Fomoxa.Unity` part of 08.15.

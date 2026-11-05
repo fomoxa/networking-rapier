@@ -13,6 +13,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Committed libraries match the native source
+        run: |
+          built="$(cat native/fomoxa-rapier/built-from.txt)"
+          last="$(git log -1 --format=%H -- native/fomoxa-rapier/src native/fomoxa-rapier/Cargo.toml native/fomoxa-rapier/Cargo.lock native/fomoxa-rapier/build.rs native/fomoxa-rapier/rust-toolchain.toml)"
+          if ! git merge-base --is-ancestor "$last" "$built"; then
+            echo "native source changed at $last, libraries were built from $built"
+            exit 1
+          fi
 
       - uses: actions/checkout@v4
         with:
