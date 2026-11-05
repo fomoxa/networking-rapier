@@ -5,7 +5,11 @@ namespace Fomoxa.Networking.Rapier
 {
     internal static class RapierNative
     {
+#if (UNITY_IOS || UNITY_WEBGL) && !UNITY_EDITOR
+        private const string Library = "__Internal";
+#else
         private const string Library = "fomoxa_rapier";
+#endif
 
         [StructLayout(LayoutKind.Sequential)]
         internal struct Collider

@@ -1,0 +1,132 @@
+name: Native libraries
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - native/**
+      - '!native/fomoxa-rapier/built-from.txt'
+      - Tools/build-rapier.sh
+      - Tools/check-golden.sh
+      - .github/workflows/native-libraries.yml
+
+env:
+  FOMOXA_PLUGINS_OUT: out
+
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: linux-x64, runner: ubuntu-24.04 }
+          - { platform: linux-arm64, runner: ubuntu-24.04-arm }
+          - { platform: windows-x64, runner: windows-2025 }
+          - { platform: windows-arm64, runner: windows-11-arm }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        shell: bash
+        run: Tools/build-rapier.sh ${{ matrix.platform }}
+      - name: Golden hashes
+        shell: bash
+        run: Tools/check-golden.sh ${{ matrix.platform }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugins-${{ matrix.platform }}
+          path: out/
+          if-no-files-found: error
+
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: Tools/build-rapier.sh macos
+      - run: Tools/check-golden.sh macos-arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugins-macos
+          path: out/
+          if-no-files-found: error
+
+  macos-x64-golden:
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - run: Tools/check-golden.sh macos-x64
+
+  ios:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: Tools/build-rapier.sh ios
+      - run: Tools/check-golden.sh ios-simulator
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugins-ios
+          path: out/
+          if-no-files-found: error
+
+  android:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27c
+      - name: Build
+        run: Tools/build-rapier.sh android
+        env:
+          ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Golden hashes on an emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          script: Tools/check-golden.sh android-emulator
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugins-android
+          path: out/
+          if-no-files-found: error
+
+  armv7-golden:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y qemu-user
+      - run: Tools/check-golden.sh armv7
+
+  web:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 4.0.20
+      - run: Tools/build-rapier.sh web
+      - run: Tools/check-golden.sh web
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugins-web
+          path: out/
+          if-no-files-found: error
+
+  merge:
+    needs: [desktop, macos, macos-x64-golden, ios, android, armv7-golden, web]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/upload-artifact/merge@v4
+        with:
+          name: native-libraries
+          pattern: plugins-*

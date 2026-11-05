@@ -1,5 +1,10 @@
 fn main() {
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
+    let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if os == "linux" || os == "android" {
         println!("cargo:rustc-cdylib-link-arg=-Wl,-Bsymbolic-functions");
+    }
+
+    if os == "android" {
+        println!("cargo:rustc-cdylib-link-arg=-Wl,-z,max-page-size=16384");
     }
 }

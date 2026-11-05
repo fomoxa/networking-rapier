@@ -1,0 +1,2 @@
+*.sh text eol=lf
+native/fomoxa-rapier/tests/golden.txt text eol=lf
