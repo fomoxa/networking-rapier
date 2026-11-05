@@ -10,6 +10,6 @@ if [ "$#" -ne 2 ]; then
   exit 2
 fi
 
-unzip -o "$1" -d "$PLUGINS"
+python3 -m zipfile -e "$1" "$PLUGINS"
 echo "$2" > "$REPO/native/fomoxa-rapier/built-from.txt"
 git -C "$REPO" status --short com.fomoxa.networking.rapier/Runtime/Plugins native/fomoxa-rapier/built-from.txt
