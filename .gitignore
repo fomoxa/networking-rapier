@@ -8,3 +8,10 @@ test-project/UserSettings/
 checks/two-sided/bin/
 checks/two-sided/obj/
 checks/two-sided/out/
+checks/player/Library/
+checks/player/Logs/
+checks/player/Temp/
+checks/player/UserSettings/
+checks/player/ProjectSettings/
+checks/player/Assets/Generated/
+checks/player/Assets/Generated.meta

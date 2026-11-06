@@ -17,11 +17,13 @@
     <Compile Include="$(Unity)/Standalone~/**/*.cs" />
     <Compile Include="$(Package)/Runtime/Rapier/**/*.cs" />
     <Compile Include="*.cs" />
+    <Compile Include="../checks/player/Assets/PlayerCheck/GoldenScenario.cs" />
   </ItemGroup>
 
   <ItemGroup>
     <None Include="$(Package)/Runtime/Plugins/Linux/x86_64/libfomoxa_rapier.so" Link="libfomoxa_rapier.so" CopyToOutputDirectory="PreserveNewest" />
     <None Include="$(Package)/Runtime/Plugins/Windows/x86_64/fomoxa_rapier.dll" Link="fomoxa_rapier.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../native/fomoxa-rapier/tests/golden.txt" Link="golden.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

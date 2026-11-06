@@ -91,7 +91,7 @@ unsafe fn run_3d() {
     let hull_points = [0.4, 0.0, 0.0, -0.4, 0.0, 0.0, 0.0, 0.5, 0.0, 0.0, -0.5, 0.1, 0.0, 0.0, 0.6, 0.1, 0.1, -0.6];
     let mut bodies = Vec::new();
     for index in 0..60u32 {
-        let position = [(index % 7) as f32 * 1.13 - 3.0, 6.0 + index as f32 * 0.9, (index % 5) as f32 * 0.97 - 2.0];
+        let position = [(index % 7) as f32 * 1.125 - 3.0, 6.0 + index as f32 * 0.875, (index % 5) as f32 * 0.875 - 2.0];
         let rotation = [0.1, 0.2, 0.3, 0.927_361_85];
         let shape = match index % 4 {
             0 => collider(0, [0.4, 0.3, 0.5], 0.0, 0.0, &[], &[]),
@@ -99,7 +99,7 @@ unsafe fn run_3d() {
             2 => collider(2, [0.0; 3], 0.3, 0.4, &[], &[]),
             _ => collider(3, [0.0; 3], 0.0, 0.0, &hull_points, &[]),
         };
-        let mass = 1.0 + index as f32 * 0.05;
+        let mass = 1.0 + index as f32 * 0.0625;
         bodies.push(fr_body_create(world, 0, position.as_ptr(), rotation.as_ptr(), mass, 0, 1.0, 0.02, 0.03, &shape, 1));
     }
 
@@ -145,16 +145,16 @@ unsafe fn run_2d() {
     let polygon_points = [-0.4, -0.3, 0.4, -0.3, 0.5, 0.2, 0.0, 0.5, -0.5, 0.2];
     let mut bodies = Vec::new();
     for index in 0..60u32 {
-        let x = (index % 9) as f32 * 1.13 - 4.0;
-        let y = 6.0 + index as f32 * 0.9;
+        let x = (index % 9) as f32 * 1.125 - 4.0;
+        let y = 6.0 + index as f32 * 0.875;
         let shape = match index % 4 {
             0 => collider_2d(0, [0.4, 0.3], 0.0, 0.0, &[]),
             1 => collider_2d(1, [0.0; 2], 0.45, 0.0, &[]),
             2 => collider_2d(2, [0.0; 2], 0.3, 0.4, &[]),
             _ => collider_2d(3, [0.0; 2], 0.0, 0.0, &polygon_points),
         };
-        let mass = 1.0 + index as f32 * 0.05;
-        bodies.push(fr2_body_create(world, 0, x, y, index as f32 * 0.1, mass, 0, 1.0, 0.02, 0.03, &shape, 1));
+        let mass = 1.0 + index as f32 * 0.0625;
+        bodies.push(fr2_body_create(world, 0, x, y, index as f32 * 0.125, mass, 0, 1.0, 0.02, 0.03, &shape, 1));
     }
 
     let mut saved = Vec::new();
