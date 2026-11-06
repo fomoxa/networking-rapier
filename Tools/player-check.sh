@@ -31,13 +31,12 @@ sync_sources() {
     --exclude='checks/player/Logs' \
     --exclude='checks/player/Temp' \
     --exclude='checks/player/UserSettings' \
-    --exclude='checks/player/ProjectSettings' \
     "$REPO/" "$DST/networking-rapier/"
   rsync -a --delete "$CORE/" "$DST/unity/com.fomoxa.networking/"
 }
 
 keep_meta_files() {
-  rsync -rt --chmod=D755,F644 --exclude='Generated/' --exclude='Generated.meta' --include='*/' --include='*.meta' --exclude='*' \
+  rsync -rtm --chmod=D755,F644 --exclude='Generated/' --exclude='Generated.meta' --include='*/' --include='*.meta' --exclude='*' \
     "$DST/networking-rapier/checks/player/Assets/" "$REPO/checks/player/Assets/"
 }
 
@@ -67,14 +66,14 @@ build() {
 }
 
 expect_windows_library() {
-  local name="$1" machine="$2" found kind
-  found="$(find "$DST/builds/$name" -name fomoxa_rapier.dll)"
-  kind="$(file -b "$found" 2>/dev/null || true)"
-  if [ "$(printf '%s\n' "$found" | grep -c .)" -ne 1 ] || [[ "$kind" != *"$machine"* ]]; then
-    echo "player-check: $name: expected one $machine fomoxa_rapier.dll, found: ${found:-none}"
+  local name="$1" folder="$2" machine="$3" library kind
+  library="${PRODUCT}_Data/Plugins/$folder/fomoxa_rapier.dll"
+  kind="$(file -b "$DST/builds/$name/$library" 2>/dev/null || true)"
+  if [[ "$kind" != *"$machine"* ]]; then
+    echo "player-check: $name: expected an $machine library at $library, found: ${kind:-nothing}"
     exit 1
   fi
-  echo "player-check: $name: ${found#"$DST/builds/$name/"} is $machine"
+  echo "player-check: $name: $library is $machine"
 }
 
 expect_android_library() {
@@ -156,13 +155,13 @@ case "${1:-}" in
   windows-mono|windows-il2cpp)
     sync_sources
     build "$1" Win64
-    expect_windows_library "$1" x86-64
+    expect_windows_library "$1" x86_64 x86-64
     run_windows "$1"
     ;;
   windows-arm64)
     sync_sources
     build "$1" Win64
-    expect_windows_library "$1" ARM64
+    expect_windows_library "$1" ARM64 ARM64
     echo "player-check: $1: built; this machine cannot run an ARM64 player"
     ;;
   android-arm64)

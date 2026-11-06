@@ -22,6 +22,7 @@ com.fomoxa.networking.rapier/    Unity package (Runtime/Rapier has no UnityEngin
 tests/                           dotnet tests of the tier 1 part
 test-project/                    Unity project that runs the package tests
 checks/two-sided/                console server of the two-sided check
+checks/player/                   Unity project that runs the golden hashes inside players
 Tools/                           library builds, Unity tests on Windows, two-sided check, third-party notices
 implementation/                  implementation notes of the steps done in this repository
 ```
@@ -39,6 +40,7 @@ implementation/                  implementation notes of the steps done in this 
 |---|---|
 | Build the libraries of this machine | `Tools/build-rapier.sh linux`, `Tools/build-rapier.sh windows`, `Tools/build-rapier.sh all` |
 | Golden hashes | `Tools/check-golden.sh linux-x64` (the script lists the other platforms) |
+| Player check | `Tools/player-check.sh windows-mono` (the script lists the other rows) |
 | Install the libraries from the workflow | `Tools/install-native.sh native-libraries.zip <commit of the run>` |
 | dotnet tests | `dotnet test tests/Fomoxa.Networking.Rapier.Tests.csproj` |
 | Unity EditMode tests | `Tools/unity-windows-check.sh` |
@@ -65,6 +67,8 @@ The workflow `.github/workflows/native-libraries.yml` builds the libraries for e
 The workflow also runs the hashes on 32-bit ARM under QEMU, for the 32-bit code path of `armeabi-v7a`.
 
 After a change to the crate: push it, wait for the workflow, download `native-libraries`, run `Tools/install-native.sh` with the commit of that run, run the tests and commit the libraries with `built-from.txt`. A commit that changes `tests/golden.txt` states why the state of the simulation changed.
+
+`Tools/player-check.sh` runs the same scenario through the C# API inside Unity players (Windows Mono and IL2CPP, Web, Android) and compares it with `golden.txt`. It needs the Unity modules of those platforms and, for Android, a phone with USB debugging; it does not run in CI.
 
 The Web library does not link with **Enable C/C++ Native Multithreading** (`-pthread`), because stable Rust has no standard library built with `atomics`.
 
