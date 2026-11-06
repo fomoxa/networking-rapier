@@ -6,6 +6,12 @@
 3d 900 124e297025a83792
 3d replay true
 3d ray true 19 421e9fa5
+3d ray-skip true 0 421ffcec
+3d ray-layer false 0 00000000
+3d cast true 13 421bfc6a
+3d overlap 7 12,17,18,38,53,58,59
+3d moved true 1 411b3333
+3d inside true 1 00000000
 2d 150 c97da396a3cb0eea
 2d 300 e2c22756c345bdb9
 2d 450 a1e601e5c3be3030
@@ -13,3 +19,10 @@
 2d 750 d248bc9e698c741f
 2d 900 261b66209cb4eded
 2d replay true
+2d ray true 59 4219040a
+2d ray-skip true 14 421b98d7
+2d ray-layer false 0 00000000
+2d cast true 59 42177320
+2d overlap 12 4,5,6,13,22,32,41,48,49,50,58,59
+2d moved true 1 411b3333
+2d inside true 1 00000000

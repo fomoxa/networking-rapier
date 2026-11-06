@@ -206,20 +206,26 @@ namespace Fomoxa.Networking.Rapier
             }
         }
 
-        public bool Raycast(Vector3 origin, Vector3 direction, float maxDistance, out RayHit hit)
+        public bool Raycast(Vector3 origin, Vector3 direction, float maxDistance, in QueryFilter filter, out RayHit hit)
         {
-            if (!RapierNative.fr_world_raycast(world, new[] { origin.X, origin.Y, origin.Z }, new[] { direction.X, direction.Y, direction.Z }, maxDistance, out RapierNative.RayHit found))
-            {
-                hit = default;
-                return false;
-            }
-
-            hit = new RayHit(new BodyHandle((int)found.Body), new Vector3(found.PointX, found.PointY, found.PointZ), new Vector3(found.NormalX, found.NormalY, found.NormalZ), found.Distance);
-            return true;
+            RapierNative.QueryFilter native = RapierNative.QueryFilter.Of(filter);
+            bool found = RapierNative.fr_world_raycast(world, origin, direction, maxDistance, native, out RapierNative.RayHit nativeHit);
+            hit = found ? HitOf(nativeHit) : default;
+            return found;
         }
 
-        public int Overlap(Vector3 center, float radius, BodyHandle[] results)
+        public bool ShapeCast(in BodyShape shape, Vector3 position, Quaternion rotation, Vector3 direction, float maxDistance, in QueryFilter filter, out RayHit hit)
         {
+            RapierNative.QueryShape nativeShape = RapierNative.QueryShape.Of(shape);
+            RapierNative.QueryFilter native = RapierNative.QueryFilter.Of(filter);
+            bool found = RapierNative.fr_world_shape_cast(world, nativeShape, position, rotation, direction, maxDistance, native, out RapierNative.RayHit nativeHit);
+            hit = found ? HitOf(nativeHit) : default;
+            return found;
+        }
+
+        public int Overlap(in BodyShape shape, Vector3 position, Quaternion rotation, in QueryFilter filter, BodyHandle[] results)
+        {
+            RapierNative.QueryShape nativeShape = RapierNative.QueryShape.Of(shape);
             if (results == null)
             {
                 throw new ArgumentNullException(nameof(results));
@@ -230,7 +236,8 @@ namespace Fomoxa.Networking.Rapier
                 overlapped = new uint[results.Length];
             }
 
-            int count = (int)RapierNative.fr_world_overlap(world, center.X, center.Y, center.Z, radius, overlapped, (uint)results.Length);
+            RapierNative.QueryFilter native = RapierNative.QueryFilter.Of(filter);
+            int count = (int)RapierNative.fr_world_overlap(world, nativeShape, position, rotation, native, overlapped, (uint)results.Length);
             for (int index = 0; index < count; index++)
             {
                 results[index] = new BodyHandle((int)overlapped[index]);
@@ -238,7 +245,6 @@ namespace Fomoxa.Networking.Rapier
 
             return count;
         }
-
 
         public void CollectMoved(List<BodyHandle> into)
         {
@@ -296,6 +302,9 @@ namespace Fomoxa.Networking.Rapier
 
         private static RapierSnapshot Expect(PhysicsSnapshot snapshot) =>
             snapshot as RapierSnapshot ?? throw new ArgumentException("the snapshot was not created by a Rapier world", nameof(snapshot));
+
+        private static RayHit HitOf(in RapierNative.RayHit hit) =>
+            new RayHit(new BodyHandle((int)hit.Body), new Vector3(hit.PointX, hit.PointY, hit.PointZ), new Vector3(hit.NormalX, hit.NormalY, hit.NormalZ), hit.Distance);
 
         private static ArgumentException Missing(BodyHandle body) => new ArgumentException($"body {body.Value} is not in this world", nameof(body));
 

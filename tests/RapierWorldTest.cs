@@ -195,6 +195,125 @@ namespace Fomoxa.Networking.Rapier.Tests
         }
 
         [Test]
+        public void FiltersChooseLayersAndTriggersAndSkipABody()
+        {
+            using (var world = new RapierWorld(Vector3.Zero))
+            {
+                BodyHandle trigger = world.CreateBody(Cube(new Vector3(0f, 0f, 2f), 0, true));
+                BodyHandle near = world.CreateBody(Cube(new Vector3(0f, 0f, 5f), 0, false));
+                BodyHandle far = world.CreateBody(Cube(new Vector3(0f, 0f, 8f), 3, false));
+                var solid = new QueryFilter(-1, default, false);
+                BodyShape column = BodyShape.Box(new Vector3(1f, 1f, 5f));
+                var middle = new Vector3(0f, 0f, 5f);
+                var results = new BodyHandle[4];
+
+                AssertRay(world, QueryFilter.All, trigger, 1.5f);
+                AssertRay(world, solid, near, 4.5f);
+                AssertRay(world, new QueryFilter(-1, near, false), far, 7.5f);
+                AssertRay(world, new QueryFilter(1 << 3, default, true), far, 7.5f);
+                Assert.IsFalse(world.Raycast(Vector3.Zero, Vector3.UnitZ, 100f, new QueryFilter(1 << 4, default, true), out _));
+                Assert.AreEqual(3, world.Overlap(column, middle, Quaternion.Identity, QueryFilter.All, results));
+                Assert.AreEqual(2, world.Overlap(column, middle, Quaternion.Identity, solid, results));
+                Assert.AreEqual(1, world.Overlap(column, middle, Quaternion.Identity, new QueryFilter(1, near, true), results));
+                Assert.AreEqual(trigger.Value, results[0].Value);
+            }
+        }
+
+        [Test]
+        public void ShapeCastsAndOverlapsTakeABoxASphereAndACapsule()
+        {
+            using (var world = new RapierWorld(Vector3.Zero))
+            {
+                BodyHandle target = world.CreateBody(Cube(new Vector3(0f, 0f, 5f), 0, false));
+                Quaternion lying = Quaternion.CreateFromAxisAngle(Vector3.UnitX, MathF.PI / 2f);
+                var shapes = new[]
+                {
+                    (BodyShape.Box(new Vector3(0.5f, 0.5f, 0.5f)), Quaternion.Identity, 4f),
+                    (BodyShape.Sphere(0.5f), Quaternion.Identity, 4f),
+                    (BodyShape.Capsule(0.5f, 0.5f), lying, 3.5f),
+                };
+                var results = new BodyHandle[4];
+
+                foreach ((BodyShape shape, Quaternion rotation, float distance) in shapes)
+                {
+                    Assert.IsTrue(world.ShapeCast(shape, Vector3.Zero, rotation, Vector3.UnitZ, 100f, QueryFilter.All, out RayHit hit), shape.Kind.ToString());
+                    Assert.AreEqual(target.Value, hit.Body.Value);
+                    Assert.AreEqual(distance, hit.Distance, 1e-4f, shape.Kind.ToString());
+                    Assert.AreEqual(-1f, hit.Normal.Z, 1e-4f);
+                    Assert.AreEqual(1, world.Overlap(shape, new Vector3(0f, 0f, 4.2f), rotation, QueryFilter.All, results), shape.Kind.ToString());
+                    Assert.AreEqual(0, world.Overlap(shape, new Vector3(0f, 2f, 4.2f), rotation, QueryFilter.All, results), shape.Kind.ToString());
+                }
+
+                BodyShape hull = BodyShape.ConvexHull(new[] { Vector3.Zero, Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ });
+                Assert.Throws<ArgumentException>(() => world.Overlap(hull, Vector3.Zero, Quaternion.Identity, QueryFilter.All, results));
+                Assert.Throws<ArgumentException>(() => world.ShapeCast(hull, Vector3.Zero, Quaternion.Identity, Vector3.UnitZ, 1f, QueryFilter.All, out _));
+            }
+        }
+
+        [Test]
+        public void AQueryStartingInsideAColliderHitsItAtDistanceZero()
+        {
+            using (var world = new RapierWorld(Vector3.Zero))
+            {
+                BodyHandle inside = world.CreateBody(Cube(Vector3.Zero, 0, false));
+                BodyHandle beyond = world.CreateBody(Cube(new Vector3(0f, 0f, 5f), 0, false));
+                var origin = new Vector3(0f, 0f, 0.1f);
+
+                Assert.IsTrue(world.Raycast(origin, Vector3.UnitZ, 100f, QueryFilter.All, out RayHit ray));
+                Assert.IsTrue(world.ShapeCast(BodyShape.Sphere(0.2f), origin, Quaternion.Identity, Vector3.UnitZ, 100f, QueryFilter.All, out RayHit cast));
+                Assert.IsTrue(world.Raycast(origin, Vector3.UnitZ, 100f, new QueryFilter(-1, inside, true), out RayHit skipped));
+
+                Assert.AreEqual((inside.Value, 0f), (ray.Body.Value, ray.Distance));
+                Assert.AreEqual((inside.Value, 0f), (cast.Body.Value, cast.Distance));
+                Assert.AreEqual(beyond.Value, skipped.Body.Value);
+                Assert.AreEqual(4.4f, skipped.Distance, 1e-4f);
+            }
+        }
+
+        [Test]
+        public void QueriesSeeBodiesAndStaticsChangedSinceTheLastStep()
+        {
+            using (var world = new RapierWorld(Vector3.Zero))
+            {
+                BodyHandle body = world.CreateBody(Cube(new Vector3(0f, 0f, 5f), 0, false));
+                world.Step(Tick);
+                PhysicsSnapshot snapshot = world.CreateSnapshot();
+                world.Save(snapshot);
+
+                world.SetBody(body, new BodyState { Position = new Vector3(0f, 0f, 10f), Rotation = Quaternion.Identity });
+                AssertRay(world, QueryFilter.All, body, 9.5f);
+                world.Load(snapshot);
+                AssertRay(world, QueryFilter.All, body, 4.5f);
+                StaticGroup wall = world.AddStatic(new[] { new ColliderDesc(BodyShape.Box(new Vector3(1f, 1f, 0.5f)), new Vector3(0f, 0f, 3f), Quaternion.Identity, ColliderMaterial.Default, 0, false) });
+                AssertRay(world, QueryFilter.All, default, 2.5f);
+                world.RemoveStatic(wall);
+                world.RemoveBody(body);
+                Assert.IsFalse(world.Raycast(Vector3.Zero, Vector3.UnitZ, 100f, QueryFilter.All, out _));
+            }
+        }
+
+        [Test]
+        public void QueriesGiveTheSameAnswersBeforeAndAfterTheStepThatIndexesTheBodies()
+        {
+            using (var world = new RapierWorld(Vector3.Zero))
+            {
+                BodyShape[] shapes = { BodyShape.Box(new Vector3(0.4f, 0.3f, 0.5f)), BodyShape.Sphere(0.45f), BodyShape.Capsule(0.3f, 0.4f) };
+                var rotation = new Quaternion(0.1f, 0.2f, 0.3f, 0.92736185f);
+                for (int index = 0; index < 64; index++)
+                {
+                    var position = new Vector3(index % 4 * 1.5f, index / 4 % 4 * 1.5f, index / 16 * 1.5f);
+                    var collider = new ColliderDesc(shapes[index % 3], Vector3.Zero, Quaternion.Identity, ColliderMaterial.Default, 0, false);
+                    world.CreateBody(new BodyDesc(BodyKind.Kinematic, new[] { collider }, position, rotation, 1f));
+                }
+
+                List<string> before = QueryAnswers(world);
+                world.Step(Tick);
+
+                CollectionAssert.AreEqual(before, QueryAnswers(world));
+            }
+        }
+
+        [Test]
         public void HullsFallOntoTriangleMeshes()
         {
             using (var world = new RapierWorld(Gravity))
@@ -505,6 +624,39 @@ namespace Fomoxa.Networking.Rapier.Tests
 
         private static ColliderDesc Ground(int layer) =>
             new ColliderDesc(BodyShape.Box(new Vector3(10f, 0.5f, 10f)), new Vector3(0f, -0.5f, 0f), Quaternion.Identity, ColliderMaterial.Default, layer, false);
+
+        private static BodyDesc Cube(Vector3 position, int layer, bool trigger) =>
+            new BodyDesc(BodyKind.Kinematic, new[] { new ColliderDesc(BodyShape.Box(new Vector3(0.5f, 0.5f, 0.5f)), Vector3.Zero, Quaternion.Identity, ColliderMaterial.Default, layer, trigger) }, position, Quaternion.Identity, 1f);
+
+        private static void AssertRay(RapierWorld world, in QueryFilter filter, BodyHandle body, float distance)
+        {
+            Assert.IsTrue(world.Raycast(Vector3.Zero, Vector3.UnitZ, 100f, filter, out RayHit hit));
+            Assert.AreEqual(body.Value, hit.Body.Value);
+            Assert.AreEqual(distance, hit.Distance, 1e-4f);
+        }
+
+        private static List<string> QueryAnswers(RapierWorld world)
+        {
+            var answers = new List<string>();
+            var found = new BodyHandle[64];
+            for (int index = 0; index < 16; index++)
+            {
+                var origin = new Vector3(index * 0.3f - 1f, 10f, index * 0.2f);
+                var direction = new Vector3(0.1f, -1f, 0.05f);
+                world.Raycast(origin, direction, 30f, QueryFilter.All, out RayHit ray);
+                world.ShapeCast(BodyShape.Sphere(0.3f), origin, Quaternion.Identity, direction, 30f, QueryFilter.All, out RayHit cast);
+                int count = world.Overlap(BodyShape.Box(new Vector3(0.7f, 0.7f, 0.7f)), new Vector3(index * 0.3f, index * 0.25f, 2f), Quaternion.Identity, QueryFilter.All, found);
+                var bodies = new int[count];
+                for (int slot = 0; slot < count; slot++)
+                {
+                    bodies[slot] = found[slot].Value;
+                }
+
+                answers.Add($"{ray.Body.Value} {ray.Distance:R} {ray.Point} {ray.Normal} {cast.Body.Value} {cast.Distance:R} {cast.Point} {cast.Normal} {string.Join(",", bodies)}");
+            }
+
+            return answers;
+        }
 
         private static BodyDesc Ball(Vector3 position, float mass, int layer = 0) =>
             new BodyDesc(BodyKind.Dynamic, new[] { new ColliderDesc(BodyShape.Sphere(0.5f), Vector3.Zero, Quaternion.Identity, ColliderMaterial.Default, layer, false) }, position, Quaternion.Identity, mass);

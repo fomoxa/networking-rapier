@@ -1,5 +1,7 @@
 using System;
+using System.Numerics;
 using System.Runtime.InteropServices;
+using Fomoxa.Networking.Simulation;
 
 namespace Fomoxa.Networking.Rapier
 {
@@ -62,6 +64,77 @@ namespace Fomoxa.Networking.Rapier
         {
             public uint Body;
             public uint Index;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct QueryFilter
+        {
+            public uint LayerMask;
+            public uint ExcludeBody;
+            public uint IncludeTriggers;
+
+            internal static QueryFilter Of(in Simulation.QueryFilter filter) => new QueryFilter
+            {
+                LayerMask = unchecked((uint)filter.LayerMask),
+                ExcludeBody = unchecked((uint)filter.ExcludeBody.Value),
+                IncludeTriggers = filter.IncludeTriggers ? 1u : 0u,
+            };
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct QueryShape
+        {
+            public uint Shape;
+            public float HalfExtentsX;
+            public float HalfExtentsY;
+            public float HalfExtentsZ;
+            public float Radius;
+            public float HalfHeight;
+
+            internal static QueryShape Of(in BodyShape shape)
+            {
+                if (shape.Kind != ShapeKind.Box && shape.Kind != ShapeKind.Sphere && shape.Kind != ShapeKind.Capsule)
+                {
+                    throw new ArgumentException($"a {shape.Kind} cannot be a query shape; use a box, a sphere or a capsule", nameof(shape));
+                }
+
+                return new QueryShape
+                {
+                    Shape = (uint)shape.Kind,
+                    HalfExtentsX = shape.HalfExtents.X,
+                    HalfExtentsY = shape.HalfExtents.Y,
+                    HalfExtentsZ = shape.HalfExtents.Z,
+                    Radius = shape.Radius,
+                    HalfHeight = shape.HalfHeight,
+                };
+            }
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct QueryShape2D
+        {
+            public uint Shape;
+            public float HalfExtentsX;
+            public float HalfExtentsY;
+            public float Radius;
+            public float HalfHeight;
+
+            internal static QueryShape2D Of(in BodyShape2D shape)
+            {
+                if (shape.Kind != ShapeKind2D.Box && shape.Kind != ShapeKind2D.Circle && shape.Kind != ShapeKind2D.Capsule)
+                {
+                    throw new ArgumentException($"a {shape.Kind} cannot be a query shape; use a box, a circle or a capsule", nameof(shape));
+                }
+
+                return new QueryShape2D
+                {
+                    Shape = (uint)shape.Kind,
+                    HalfExtentsX = shape.HalfExtents.X,
+                    HalfExtentsY = shape.HalfExtents.Y,
+                    Radius = shape.Radius,
+                    HalfHeight = shape.HalfHeight,
+                };
+            }
         }
 
         [StructLayout(LayoutKind.Sequential)]
@@ -140,13 +213,17 @@ namespace Fomoxa.Networking.Rapier
 
         [DllImport(Library)]
         [return: MarshalAs(UnmanagedType.U1)]
-        internal static extern bool fr_world_raycast(IntPtr world, float[] origin, float[] direction, float maxDistance, out RayHit hit);
+        internal static extern bool fr_world_raycast(IntPtr world, in Vector3 origin, in Vector3 direction, float maxDistance, in QueryFilter filter, out RayHit hit);
+
+        [DllImport(Library)]
+        [return: MarshalAs(UnmanagedType.U1)]
+        internal static extern bool fr_world_shape_cast(IntPtr world, in QueryShape shape, in Vector3 position, in Quaternion rotation, in Vector3 direction, float maxDistance, in QueryFilter filter, out RayHit hit);
 
         [DllImport(Library)]
         internal static extern uint fr_collider_touching(IntPtr world, uint body, uint index, [Out] ColliderRef[] touching, uint capacity);
 
         [DllImport(Library)]
-        internal static extern uint fr_world_overlap(IntPtr world, float x, float y, float z, float radius, uint[] bodies, uint capacity);
+        internal static extern uint fr_world_overlap(IntPtr world, in QueryShape shape, in Vector3 position, in Quaternion rotation, in QueryFilter filter, uint[] bodies, uint capacity);
 
         [DllImport(Library)]
         internal static extern uint fr_world_moved(IntPtr world);
@@ -274,13 +351,17 @@ namespace Fomoxa.Networking.Rapier
 
         [DllImport(Library)]
         [return: MarshalAs(UnmanagedType.U1)]
-        internal static extern bool fr2_world_raycast(IntPtr world, float originX, float originY, float directionX, float directionY, float maxDistance, out RayHit2D hit);
+        internal static extern bool fr2_world_raycast(IntPtr world, float originX, float originY, float directionX, float directionY, float maxDistance, in QueryFilter filter, out RayHit2D hit);
+
+        [DllImport(Library)]
+        [return: MarshalAs(UnmanagedType.U1)]
+        internal static extern bool fr2_world_shape_cast(IntPtr world, in QueryShape2D shape, float x, float y, float rotation, float directionX, float directionY, float maxDistance, in QueryFilter filter, out RayHit2D hit);
 
         [DllImport(Library)]
         internal static extern uint fr2_collider_touching(IntPtr world, uint body, uint index, [Out] ColliderRef[] touching, uint capacity);
 
         [DllImport(Library)]
-        internal static extern uint fr2_world_overlap(IntPtr world, float x, float y, float radius, uint[] bodies, uint capacity);
+        internal static extern uint fr2_world_overlap(IntPtr world, in QueryShape2D shape, float x, float y, float rotation, in QueryFilter filter, uint[] bodies, uint capacity);
 
         [DllImport(Library)]
         internal static extern uint fr2_world_moved(IntPtr world);

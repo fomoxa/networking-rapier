@@ -1,13 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::slice;
 
+use rapier2d::parry::query::{self, ShapeCastOptions};
 use rapier2d::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::contact::{collider_ref, collider_tag, write_refs, FrColliderRef};
 use crate::hash::StableHasher;
+use crate::query::FrQueryFilter;
 
-const SNAPSHOT_FORMAT: u32 = 2;
+const SNAPSHOT_FORMAT: u32 = 3;
 const ALL_LAYERS: u32 = u32::MAX;
 
 const LOCK_POSITION_X: u32 = 1;
@@ -50,6 +52,15 @@ pub struct FrBodyState2D {
     pub rotation: f32,
     pub velocity: [f32; 2],
     pub angular_velocity: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FrQueryShape2D {
+    pub shape: u32,
+    pub half_extents: [f32; 2],
+    pub radius: f32,
+    pub half_height: f32,
 }
 
 #[repr(C)]
@@ -112,6 +123,7 @@ struct SnapshotRef<'a> {
     world: &'a PhysicsWorld,
     handles: Vec<(u32, u32, u32)>,
     statics: Vec<(u32, u32, u32)>,
+    dirty: Vec<(u32, u32)>,
 }
 
 #[derive(Deserialize)]
@@ -120,6 +132,7 @@ struct Snapshot {
     world: PhysicsWorld,
     handles: Vec<(u32, u32, u32)>,
     statics: Vec<(u32, u32, u32)>,
+    dirty: Vec<(u32, u32)>,
 }
 
 pub struct World2D {
@@ -132,6 +145,7 @@ pub struct World2D {
     scratch: Vec<u8>,
     written: BTreeSet<u32>,
     moved: Vec<u32>,
+    dirty: BTreeSet<(u32, u32)>,
 }
 
 impl World2D {
@@ -148,12 +162,14 @@ impl World2D {
             scratch: Vec::new(),
             written: BTreeSet::new(),
             moved: Vec::new(),
+            dirty: BTreeSet::new(),
         }
     }
 
     fn step(&mut self, seconds: f32) {
         self.physics.integration_parameters.dt = seconds;
         self.physics.step();
+        self.dirty.clear();
         for entry in self.bodies.values() {
             if let Some(body) = self.physics.bodies.get_mut(entry.handle) {
                 body.reset_forces(false);
@@ -172,6 +188,7 @@ impl World2D {
         self.next_group += 1;
         for (collider, recipe) in built.into_iter().zip(colliders) {
             let handle = self.physics.insert_collider(collider, None);
+            self.dirty.insert(handle.into_raw_parts());
             self.statics.push(StaticSlot { group, recipe, handle: Some(handle) });
         }
 
@@ -213,7 +230,9 @@ impl World2D {
                 Some(handle) => self.statics[index].handle = Some(*handle),
                 None => {
                     if let Some(collider) = build_collider(&self.statics[index].recipe, &self.layers, 1.0, collider_tag(0, index as u32)) {
-                        self.statics[index].handle = Some(self.physics.insert_collider(collider, None));
+                        let handle = self.physics.insert_collider(collider, None);
+                        self.dirty.insert(handle.into_raw_parts());
+                        self.statics[index].handle = Some(handle);
                     }
                 }
             }
@@ -251,7 +270,9 @@ impl World2D {
         let handle = self.physics.insert_body(builder.pose(pose(position, rotation)).user_data(u128::from(id)).build());
         let mut collider_handles = Vec::with_capacity(built.len());
         for collider in built {
-            collider_handles.push(self.physics.insert_collider(collider, Some(handle)));
+            let collider_handle = self.physics.insert_collider(collider, Some(handle));
+            self.dirty.insert(collider_handle.into_raw_parts());
+            collider_handles.push(collider_handle);
         }
 
         if recipe.kind == KIND_DYNAMIC && recipe.mass > 0.0 {
@@ -303,6 +324,7 @@ impl World2D {
             Some(body) => {
                 apply_state(body, state);
                 self.written.insert(id);
+                self.mark_dirty(id);
                 true
             }
             None => false,
@@ -318,6 +340,14 @@ impl World2D {
             }
             None => false,
         }
+    }
+
+    fn mark_dirty(&mut self, id: u32) {
+        let colliders: Vec<(u32, u32)> = match self.body(id) {
+            Some(body) => body.colliders().iter().map(|handle| handle.into_raw_parts()).collect(),
+            None => return,
+        };
+        self.dirty.extend(colliders);
     }
 
     fn kind(&self, id: u32) -> Option<u32> {
@@ -353,7 +383,8 @@ impl World2D {
                 })
             })
             .collect();
-        let snapshot = SnapshotRef { format: SNAPSHOT_FORMAT, world: &self.physics, handles, statics };
+        let dirty = self.dirty.iter().copied().collect();
+        let snapshot = SnapshotRef { format: SNAPSHOT_FORMAT, world: &self.physics, handles, statics, dirty };
         self.scratch = bincode::serialize(&snapshot).unwrap_or_default();
         self.scratch.len()
     }
@@ -380,6 +411,7 @@ impl World2D {
             .map(|(id, index, generation)| (*id, RigidBodyHandle::from_raw_parts(*index, *generation)))
             .collect();
         self.physics = snapshot.world;
+        self.dirty = snapshot.dirty.into_iter().collect();
         self.restore_statics(&snapshot.statics);
         let entries = std::mem::take(&mut self.bodies);
         let kept: BTreeSet<u32> = entries.keys().copied().collect();
@@ -399,6 +431,8 @@ impl World2D {
                             body.set_body_type(body_type(kind), true);
                             apply_state(body, &state);
                         }
+
+                        self.mark_dirty(id);
                     }
                 }
                 None => {
@@ -432,16 +466,48 @@ impl World2D {
         hasher.finish()
     }
 
-    fn raycast(&self, origin: Vector, direction: Vector, max_distance: f32) -> Option<FrRayHit2D> {
+    fn accepts(&self, collider: &Collider, filter: &FrQueryFilter) -> bool {
+        (filter.include_triggers != 0 || !collider.is_sensor())
+            && collider.collision_groups().memberships.bits() & filter.layer_mask != 0
+            && (filter.exclude_body == 0 || self.owner_of_collider(collider) != filter.exclude_body)
+    }
+
+    fn with_pipeline<T>(&self, filter: &FrQueryFilter, bodies_only: bool, run: impl FnOnce(&QueryPipeline) -> T) -> T {
+        let predicate = |handle: ColliderHandle, collider: &Collider| {
+            !self.dirty.contains(&handle.into_raw_parts())
+                && self.accepts(collider, filter)
+                && (!bodies_only || self.owner_of_collider(collider) != 0)
+        };
+        let pipeline = self.physics.broad_phase.as_query_pipeline(
+            self.physics.narrow_phase.query_dispatcher(),
+            &self.physics.bodies,
+            &self.physics.colliders,
+            QueryFilter::new().predicate(&predicate),
+        );
+        run(&pipeline)
+    }
+
+    fn dirty_colliders<'a>(&'a self, filter: &'a FrQueryFilter, bodies_only: bool) -> impl Iterator<Item = (ColliderHandle, &'a Collider, Pose)> + 'a {
+        self.dirty.iter().filter_map(move |(index, generation)| {
+            let handle = ColliderHandle::from_raw_parts(*index, *generation);
+            let collider = self.physics.colliders.get(handle)?;
+            if self.accepts(collider, filter) && (!bodies_only || self.owner_of_collider(collider) != 0) {
+                Some((handle, collider, self.pose_of(collider)))
+            } else {
+                None
+            }
+        })
+    }
+
+    fn raycast(&self, origin: Vector, direction: Vector, max_distance: f32, filter: &FrQueryFilter) -> Option<FrRayHit2D> {
         let length = direction.length();
         if length == 0.0 {
             return None;
         }
 
         let ray = Ray::new(origin, direction / length);
-        let mut best: Option<(ColliderHandle, RayIntersection)> = None;
-        for (handle, collider) in self.physics.colliders.iter() {
-            let pose = self.pose_of(collider);
+        let mut best = self.with_pipeline(filter, false, |pipeline| pipeline.cast_ray_and_get_normal(&ray, max_distance, true));
+        for (handle, collider, pose) in self.dirty_colliders(filter, false) {
             if let Some(hit) = collider.shape().cast_ray_and_get_normal(&pose, &ray, max_distance, true) {
                 if best.map_or(true, |(_, found)| hit.time_of_impact < found.time_of_impact) {
                     best = Some((handle, hit));
@@ -459,19 +525,51 @@ impl World2D {
         })
     }
 
-    fn overlap(&self, center: Vector, radius: f32) -> Vec<u32> {
-        let ball = Ball::new(radius);
-        let ball_pose = Pose::from_translation(center);
-        let mut found = BTreeSet::new();
-        for (handle, collider) in self.physics.colliders.iter() {
-            let owner = self.owner_of(handle);
-            if owner == 0 || found.contains(&owner) {
-                continue;
-            }
+    fn shape_cast(&self, shape: &dyn Shape, shape_pose: Pose, direction: Vector, max_distance: f32, filter: &FrQueryFilter) -> Option<FrRayHit2D> {
+        let length = direction.length();
+        if length == 0.0 {
+            return None;
+        }
 
-            let pose = self.pose_of(collider);
-            if rapier2d::parry::query::intersection_test(&ball_pose, &ball, &pose, collider.shape()).is_ok_and(|hit| hit.intersecting) {
-                found.insert(owner);
+        let velocity = direction / length;
+        let options = ShapeCastOptions {
+            max_time_of_impact: max_distance,
+            target_distance: 0.0,
+            stop_at_penetration: true,
+            compute_impact_geometry_on_penetration: true,
+        };
+        let mut best = self.with_pipeline(filter, false, |pipeline| {
+            pipeline
+                .cast_shape(&shape_pose, velocity, shape, options)
+                .map(|(handle, hit)| (handle, hit.time_of_impact, hit.witness1, hit.normal1))
+        });
+        for (handle, collider, pose) in self.dirty_colliders(filter, false) {
+            if let Ok(Some(hit)) = query::cast_shapes(&pose, Vector::ZERO, collider.shape(), &shape_pose, velocity, shape, options) {
+                if best.map_or(true, |(_, found, _, _)| hit.time_of_impact < found) {
+                    best = Some((handle, hit.time_of_impact, pose * hit.witness1, pose.rotation * hit.normal1));
+                }
+            }
+        }
+
+        let (collider, distance, point, normal) = best?;
+        Some(FrRayHit2D {
+            body: self.owner_of(collider),
+            point: [point.x, point.y],
+            normal: [normal.x, normal.y],
+            distance,
+        })
+    }
+
+    fn overlap(&self, shape: &dyn Shape, shape_pose: Pose, filter: &FrQueryFilter) -> Vec<u32> {
+        let mut found = BTreeSet::new();
+        self.with_pipeline(filter, true, |pipeline| {
+            for (handle, _) in pipeline.intersect_shape(shape_pose, shape) {
+                found.insert(self.owner_of(handle));
+            }
+        });
+        for (handle, collider, pose) in self.dirty_colliders(filter, true) {
+            if query::intersection_test(&shape_pose, shape, &pose, collider.shape()).is_ok_and(|hit| hit.intersecting) {
+                found.insert(self.owner_of(handle));
             }
         }
 
@@ -530,10 +628,12 @@ impl World2D {
     }
 
     fn owner_of(&self, collider: ColliderHandle) -> u32 {
-        self.physics
-            .colliders
-            .get(collider)
-            .and_then(|collider| collider.parent())
+        self.physics.colliders.get(collider).map_or(0, |collider| self.owner_of_collider(collider))
+    }
+
+    fn owner_of_collider(&self, collider: &Collider) -> u32 {
+        collider
+            .parent()
             .and_then(|parent| self.physics.bodies.get(parent))
             .map(|body| body.user_data as u32)
             .unwrap_or(0)
@@ -848,18 +948,16 @@ pub unsafe extern "C" fn fr2_body_add_impulse(world_ptr: *mut World2D, body: u32
     }
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn fr2_world_raycast(
-    world_ptr: *mut World2D,
-    origin_x: f32,
-    origin_y: f32,
-    direction_x: f32,
-    direction_y: f32,
-    max_distance: f32,
-    hit: *mut FrRayHit2D,
-) -> bool {
-    let found = world(world_ptr)
-        .and_then(|world| world.raycast(Vector::new(origin_x, origin_y), Vector::new(direction_x, direction_y), max_distance));
+fn query_shape(shape: &FrQueryShape2D) -> Option<SharedShape> {
+    match shape.shape {
+        SHAPE_BOX => Some(SharedShape::cuboid(shape.half_extents[0], shape.half_extents[1])),
+        SHAPE_CIRCLE => Some(SharedShape::ball(shape.radius)),
+        SHAPE_CAPSULE => Some(SharedShape::capsule_y(shape.half_height, shape.radius)),
+        _ => None,
+    }
+}
+
+unsafe fn write_hit(found: Option<FrRayHit2D>, hit: *mut FrRayHit2D) -> bool {
     match (found, hit.as_mut()) {
         (Some(found), Some(out)) => {
             *out = found;
@@ -870,10 +968,65 @@ pub unsafe extern "C" fn fr2_world_raycast(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn fr2_world_overlap(world_ptr: *mut World2D, x: f32, y: f32, radius: f32, bodies: *mut u32, capacity: u32) -> u32 {
-    let found = match world(world_ptr) {
-        Some(world) => world.overlap(Vector::new(x, y), radius),
+pub unsafe extern "C" fn fr2_world_raycast(
+    world_ptr: *mut World2D,
+    origin_x: f32,
+    origin_y: f32,
+    direction_x: f32,
+    direction_y: f32,
+    max_distance: f32,
+    filter: *const FrQueryFilter,
+    hit: *mut FrRayHit2D,
+) -> bool {
+    let found = match (world(world_ptr), filter.as_ref()) {
+        (Some(world), Some(filter)) => world.raycast(Vector::new(origin_x, origin_y), Vector::new(direction_x, direction_y), max_distance, filter),
+        _ => None,
+    };
+    write_hit(found, hit)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fr2_world_shape_cast(
+    world_ptr: *mut World2D,
+    shape: *const FrQueryShape2D,
+    x: f32,
+    y: f32,
+    rotation: f32,
+    direction_x: f32,
+    direction_y: f32,
+    max_distance: f32,
+    filter: *const FrQueryFilter,
+    hit: *mut FrRayHit2D,
+) -> bool {
+    let shape = match shape.as_ref().and_then(query_shape) {
+        Some(shape) => shape,
+        None => return false,
+    };
+    let found = match (world(world_ptr), filter.as_ref()) {
+        (Some(world), Some(filter)) => world.shape_cast(&*shape, pose([x, y], rotation), Vector::new(direction_x, direction_y), max_distance, filter),
+        _ => None,
+    };
+    write_hit(found, hit)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fr2_world_overlap(
+    world_ptr: *mut World2D,
+    shape: *const FrQueryShape2D,
+    x: f32,
+    y: f32,
+    rotation: f32,
+    filter: *const FrQueryFilter,
+    bodies: *mut u32,
+    capacity: u32,
+) -> u32 {
+    let shape = match shape.as_ref().and_then(query_shape) {
+        Some(shape) => shape,
         None => return 0,
+    };
+    let found = match (world(world_ptr), filter.as_ref()) {
+        (Some(world), Some(filter)) => world.overlap(&*shape, pose([x, y], rotation), filter),
+        _ => return 0,
     };
     let count = found.len().min(capacity as usize);
     if count > 0 && !bodies.is_null() {

@@ -7,6 +7,8 @@ const REPORT_EVERY: u32 = 150;
 const SNAPSHOT_AT: u32 = 450;
 const SECONDS: f32 = 1.0 / 30.0;
 const IDENTITY: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+const TURNED: [f32; 4] = [0.6, 0.0, 0.0, 0.8];
+const ALL: FrQueryFilter = FrQueryFilter { layer_mask: u32::MAX, exclude_body: 0, include_triggers: 1 };
 
 fn collider(shape: u32, half_extents: [f32; 3], radius: f32, half_height: f32, points: &[f32], triangles: &[u32]) -> FrCollider {
     FrCollider {
@@ -80,6 +82,71 @@ unsafe fn step_2d(world: *mut World2D, bodies: &[u32], tick: u32) {
     fr2_world_step(world, SECONDS);
 }
 
+fn ids(found: &[u32]) -> String {
+    found.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",")
+}
+
+unsafe fn ray_3d(world: *mut World, label: &str, origin: [f32; 3], direction: [f32; 3], filter: &FrQueryFilter) -> FrRayHit {
+    let mut hit = FrRayHit::default();
+    let found = fr_world_raycast(world, origin.as_ptr(), direction.as_ptr(), 100.0, filter, &mut hit);
+    println!("3d {} {} {} {:08x}", label, found, hit.body, hit.distance.to_bits());
+    hit
+}
+
+unsafe fn queries_3d(world: *mut World, moved: u32) {
+    let origin = [0.5, 40.0, 0.25];
+    let direction = [0.02, -1.0, 0.01];
+    let hit = ray_3d(world, "ray", origin, direction, &ALL);
+    ray_3d(world, "ray-skip", origin, direction, &FrQueryFilter { exclude_body: hit.body, ..ALL });
+    ray_3d(world, "ray-layer", origin, direction, &FrQueryFilter { layer_mask: 1 << 1, ..ALL });
+
+    let box_shape = FrQueryShape { shape: 0, half_extents: [0.25, 0.125, 0.375], radius: 0.0, half_height: 0.0 };
+    let mut cast = FrRayHit::default();
+    let found = fr_world_shape_cast(world, &box_shape, origin.as_ptr(), TURNED.as_ptr(), direction.as_ptr(), 100.0, &ALL, &mut cast);
+    println!("3d cast {} {} {:08x}", found, cast.body, cast.distance.to_bits());
+
+    let capsule = FrQueryShape { shape: 2, half_extents: [0.0; 3], radius: 1.5, half_height: 1.0 };
+    let center = [0.0, 2.0, 0.0];
+    let mut overlapped = [0u32; 64];
+    let count = fr_world_overlap(world, &capsule, center.as_ptr(), TURNED.as_ptr(), &ALL, overlapped.as_mut_ptr(), 64);
+    println!("3d overlap {} {}", count, ids(&overlapped[..count as usize]));
+
+    let state = FrBodyState { position: [20.0, 30.0, 20.0], rotation: IDENTITY, velocity: [0.0; 3], angular_velocity: [0.0; 3] };
+    assert!(fr_body_set(world, moved, &state));
+    ray_3d(world, "moved", [20.0, 40.0, 20.0], [0.0, -1.0, 0.0], &ALL);
+    ray_3d(world, "inside", [20.0, 30.0, 20.0], [0.0, -1.0, 0.0], &ALL);
+}
+
+unsafe fn ray_2d(world: *mut World2D, label: &str, origin: [f32; 2], direction: [f32; 2], filter: &FrQueryFilter) -> FrRayHit2D {
+    let mut hit = FrRayHit2D::default();
+    let found = fr2_world_raycast(world, origin[0], origin[1], direction[0], direction[1], 100.0, filter, &mut hit);
+    println!("2d {} {} {} {:08x}", label, found, hit.body, hit.distance.to_bits());
+    hit
+}
+
+unsafe fn queries_2d(world: *mut World2D, moved: u32) {
+    let origin = [0.5, 40.0];
+    let direction = [0.02, -1.0];
+    let hit = ray_2d(world, "ray", origin, direction, &ALL);
+    ray_2d(world, "ray-skip", origin, direction, &FrQueryFilter { exclude_body: hit.body, ..ALL });
+    ray_2d(world, "ray-layer", origin, direction, &FrQueryFilter { layer_mask: 1 << 1, ..ALL });
+
+    let circle = FrQueryShape2D { shape: 1, half_extents: [0.0; 2], radius: 0.375, half_height: 0.0 };
+    let mut cast = FrRayHit2D::default();
+    let found = fr2_world_shape_cast(world, &circle, origin[0], origin[1], 0.0, direction[0], direction[1], 100.0, &ALL, &mut cast);
+    println!("2d cast {} {} {:08x}", found, cast.body, cast.distance.to_bits());
+
+    let box_shape = FrQueryShape2D { shape: 0, half_extents: [2.0, 1.0], radius: 0.0, half_height: 0.0 };
+    let mut overlapped = [0u32; 64];
+    let count = fr2_world_overlap(world, &box_shape, 0.0, 2.0, 0.5, &ALL, overlapped.as_mut_ptr(), 64);
+    println!("2d overlap {} {}", count, ids(&overlapped[..count as usize]));
+
+    let state = FrBodyState2D { position: [20.0, 30.0], rotation: 0.0, velocity: [0.0; 2], angular_velocity: 0.0 };
+    assert!(fr2_body_set(world, moved, &state));
+    ray_2d(world, "moved", [20.0, 40.0], [0.0, -1.0], &ALL);
+    ray_2d(world, "inside", [20.0, 30.0], [0.0, -1.0], &ALL);
+}
+
 unsafe fn run_3d() {
     let world = fr_world_create(0.0, -9.81, 0.0);
     let ground_points = [-50.0, 0.0, -50.0, 50.0, 2.0, -50.0, 50.0, 0.0, 50.0, -50.0, 3.0, 50.0];
@@ -127,11 +194,7 @@ unsafe fn run_3d() {
 
     println!("3d replay {}", fr_world_hash(world) == at_end);
 
-    let mut hit = FrRayHit::default();
-    let origin = [0.5, 40.0, 0.25];
-    let direction = [0.02, -1.0, 0.01];
-    let found = fr_world_raycast(world, origin.as_ptr(), direction.as_ptr(), 100.0, &mut hit);
-    println!("3d ray {} {} {:08x}", found, hit.body, hit.distance.to_bits());
+    queries_3d(world, bodies[0]);
     fr_world_destroy(world);
 }
 
@@ -180,6 +243,7 @@ unsafe fn run_2d() {
     }
 
     println!("2d replay {}", fr2_world_hash(world) == at_end);
+    queries_2d(world, bodies[0]);
     fr2_world_destroy(world);
 }
 

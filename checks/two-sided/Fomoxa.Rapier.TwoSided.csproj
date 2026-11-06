@@ -32,6 +32,12 @@
     <Reference Include="Fomoxa.Net">
       <HintPath>$(Unity)/Runtime/Plugins/Fomoxa.Net.dll</HintPath>
     </Reference>
+    <Reference Include="Fomoxa.Net.WebSockets">
+      <HintPath>$(Unity)/Runtime/Plugins/Fomoxa.Net.WebSockets.dll</HintPath>
+    </Reference>
+    <Reference Include="BouncyCastle.Cryptography">
+      <HintPath>$(Unity)/Runtime/Plugins/BouncyCastle.Cryptography.dll</HintPath>
+    </Reference>
   </ItemGroup>
 
 </Project>

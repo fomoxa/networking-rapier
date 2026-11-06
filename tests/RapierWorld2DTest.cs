@@ -155,6 +155,123 @@ namespace Fomoxa.Networking.Rapier.Tests
         }
 
         [Test]
+        public void FiltersChooseLayersAndTriggersAndSkipABody()
+        {
+            using (var world = new RapierWorld2D(Vector2.Zero))
+            {
+                BodyHandle trigger = world.CreateBody(Square(new Vector2(2f, 0f), 0, true));
+                BodyHandle near = world.CreateBody(Square(new Vector2(5f, 0f), 0, false));
+                BodyHandle far = world.CreateBody(Square(new Vector2(8f, 0f), 3, false));
+                var solid = new QueryFilter(-1, default, false);
+                BodyShape2D row = BodyShape2D.Box(new Vector2(5f, 1f));
+                var middle = new Vector2(5f, 0f);
+                var results = new BodyHandle[4];
+
+                AssertRay(world, QueryFilter.All, trigger, 1.5f);
+                AssertRay(world, solid, near, 4.5f);
+                AssertRay(world, new QueryFilter(-1, near, false), far, 7.5f);
+                AssertRay(world, new QueryFilter(1 << 3, default, true), far, 7.5f);
+                Assert.IsFalse(world.Raycast(Vector2.Zero, Vector2.UnitX, 100f, new QueryFilter(1 << 4, default, true), out _));
+                Assert.AreEqual(3, world.Overlap(row, middle, 0f, QueryFilter.All, results));
+                Assert.AreEqual(2, world.Overlap(row, middle, 0f, solid, results));
+                Assert.AreEqual(1, world.Overlap(row, middle, 0f, new QueryFilter(1, near, true), results));
+                Assert.AreEqual(trigger.Value, results[0].Value);
+            }
+        }
+
+        [Test]
+        public void ShapeCastsAndOverlapsTakeABoxACircleAndACapsule()
+        {
+            using (var world = new RapierWorld2D(Vector2.Zero))
+            {
+                BodyHandle target = world.CreateBody(Square(new Vector2(5f, 0f), 0, false));
+                var shapes = new[]
+                {
+                    (BodyShape2D.Box(new Vector2(0.5f, 0.5f)), 0f, 4f),
+                    (BodyShape2D.Circle(0.5f), 0f, 4f),
+                    (BodyShape2D.Capsule(0.5f, 0.5f), MathF.PI / 2f, 3.5f),
+                };
+                var results = new BodyHandle[4];
+
+                foreach ((BodyShape2D shape, float rotation, float distance) in shapes)
+                {
+                    Assert.IsTrue(world.ShapeCast(shape, Vector2.Zero, rotation, Vector2.UnitX, 100f, QueryFilter.All, out RayHit2D hit), shape.Kind.ToString());
+                    Assert.AreEqual(target.Value, hit.Body.Value);
+                    Assert.AreEqual(distance, hit.Distance, 1e-4f, shape.Kind.ToString());
+                    Assert.AreEqual(-1f, hit.Normal.X, 1e-4f);
+                    Assert.AreEqual(1, world.Overlap(shape, new Vector2(4.2f, 0f), rotation, QueryFilter.All, results), shape.Kind.ToString());
+                    Assert.AreEqual(0, world.Overlap(shape, new Vector2(4.2f, 2f), rotation, QueryFilter.All, results), shape.Kind.ToString());
+                }
+
+                BodyShape2D polygon = BodyShape2D.ConvexPolygon(new[] { Vector2.Zero, Vector2.UnitX, Vector2.UnitY });
+                Assert.Throws<ArgumentException>(() => world.Overlap(polygon, Vector2.Zero, 0f, QueryFilter.All, results));
+                Assert.Throws<ArgumentException>(() => world.ShapeCast(polygon, Vector2.Zero, 0f, Vector2.UnitX, 1f, QueryFilter.All, out _));
+            }
+        }
+
+        [Test]
+        public void AQueryStartingInsideAColliderHitsItAtDistanceZero()
+        {
+            using (var world = new RapierWorld2D(Vector2.Zero))
+            {
+                BodyHandle inside = world.CreateBody(Square(Vector2.Zero, 0, false));
+                BodyHandle beyond = world.CreateBody(Square(new Vector2(5f, 0f), 0, false));
+                var origin = new Vector2(0.1f, 0f);
+
+                Assert.IsTrue(world.Raycast(origin, Vector2.UnitX, 100f, QueryFilter.All, out RayHit2D ray));
+                Assert.IsTrue(world.ShapeCast(BodyShape2D.Circle(0.2f), origin, 0f, Vector2.UnitX, 100f, QueryFilter.All, out RayHit2D cast));
+                Assert.IsTrue(world.Raycast(origin, Vector2.UnitX, 100f, new QueryFilter(-1, inside, true), out RayHit2D skipped));
+
+                Assert.AreEqual((inside.Value, 0f), (ray.Body.Value, ray.Distance));
+                Assert.AreEqual((inside.Value, 0f), (cast.Body.Value, cast.Distance));
+                Assert.AreEqual(beyond.Value, skipped.Body.Value);
+                Assert.AreEqual(4.4f, skipped.Distance, 1e-4f);
+            }
+        }
+
+        [Test]
+        public void QueriesSeeBodiesAndStaticsChangedSinceTheLastStep()
+        {
+            using (var world = new RapierWorld2D(Vector2.Zero))
+            {
+                BodyHandle body = world.CreateBody(Square(new Vector2(5f, 0f), 0, false));
+                world.Step(Tick);
+                PhysicsSnapshot snapshot = world.CreateSnapshot();
+                world.Save(snapshot);
+
+                world.SetBody(body, new BodyState2D { Position = new Vector2(10f, 0f) });
+                AssertRay(world, QueryFilter.All, body, 9.5f);
+                world.Load(snapshot);
+                AssertRay(world, QueryFilter.All, body, 4.5f);
+                StaticGroup wall = world.AddStatic(new[] { new ColliderDesc2D(BodyShape2D.Box(new Vector2(0.5f, 1f)), new Vector2(3f, 0f), 0f, ColliderMaterial.Default, 0, false) });
+                AssertRay(world, QueryFilter.All, default, 2.5f);
+                world.RemoveStatic(wall);
+                world.RemoveBody(body);
+                Assert.IsFalse(world.Raycast(Vector2.Zero, Vector2.UnitX, 100f, QueryFilter.All, out _));
+            }
+        }
+
+        [Test]
+        public void QueriesGiveTheSameAnswersBeforeAndAfterTheStepThatIndexesTheBodies()
+        {
+            using (var world = new RapierWorld2D(Vector2.Zero))
+            {
+                BodyShape2D[] shapes = { BodyShape2D.Box(new Vector2(0.4f, 0.3f)), BodyShape2D.Circle(0.45f), BodyShape2D.Capsule(0.3f, 0.4f) };
+                for (int index = 0; index < 64; index++)
+                {
+                    var position = new Vector2(index % 8 * 1.5f, index / 8 * 1.5f);
+                    var collider = new ColliderDesc2D(shapes[index % 3], Vector2.Zero, 0f, ColliderMaterial.Default, 0, false);
+                    world.CreateBody(new BodyDesc2D(BodyKind.Kinematic, new[] { collider }, position, index * 0.125f, 1f));
+                }
+
+                List<string> before = QueryAnswers(world);
+                world.Step(Tick);
+
+                CollectionAssert.AreEqual(before, QueryAnswers(world));
+            }
+        }
+
+        [Test]
         public void AFallingBodyIsMovedUntilItSleepsAndAWrittenOrLoadedBodyIsMovedOnce()
         {
             using (var world = new RapierWorld2D(Gravity))
@@ -369,6 +486,39 @@ namespace Fomoxa.Networking.Rapier.Tests
 
         private static ColliderDesc2D Line(int layer) =>
             new ColliderDesc2D(BodyShape2D.Polyline(new[] { new Vector2(-10f, 0f), new Vector2(10f, 0f) }), Vector2.Zero, 0f, ColliderMaterial.Default, layer, false);
+
+        private static BodyDesc2D Square(Vector2 position, int layer, bool trigger) =>
+            new BodyDesc2D(BodyKind.Kinematic, new[] { new ColliderDesc2D(BodyShape2D.Box(new Vector2(0.5f, 0.5f)), Vector2.Zero, 0f, ColliderMaterial.Default, layer, trigger) }, position, 0f, 1f);
+
+        private static void AssertRay(RapierWorld2D world, in QueryFilter filter, BodyHandle body, float distance)
+        {
+            Assert.IsTrue(world.Raycast(Vector2.Zero, Vector2.UnitX, 100f, filter, out RayHit2D hit));
+            Assert.AreEqual(body.Value, hit.Body.Value);
+            Assert.AreEqual(distance, hit.Distance, 1e-4f);
+        }
+
+        private static List<string> QueryAnswers(RapierWorld2D world)
+        {
+            var answers = new List<string>();
+            var found = new BodyHandle[64];
+            for (int index = 0; index < 16; index++)
+            {
+                var origin = new Vector2(index * 0.7f - 1f, 20f);
+                var direction = new Vector2(0.1f, -1f);
+                world.Raycast(origin, direction, 30f, QueryFilter.All, out RayHit2D ray);
+                world.ShapeCast(BodyShape2D.Circle(0.3f), origin, 0f, direction, 30f, QueryFilter.All, out RayHit2D cast);
+                int count = world.Overlap(BodyShape2D.Box(new Vector2(0.7f, 0.7f)), new Vector2(index * 0.7f, index * 0.6f), 0.25f, QueryFilter.All, found);
+                var bodies = new int[count];
+                for (int slot = 0; slot < count; slot++)
+                {
+                    bodies[slot] = found[slot].Value;
+                }
+
+                answers.Add($"{ray.Body.Value} {ray.Distance:R} {ray.Point} {ray.Normal} {cast.Body.Value} {cast.Distance:R} {cast.Point} {cast.Normal} {string.Join(",", bodies)}");
+            }
+
+            return answers;
+        }
 
         private static BodyDesc2D Circle(Vector2 position, float mass, int layer = 0) =>
             new BodyDesc2D(BodyKind.Dynamic, new[] { new ColliderDesc2D(BodyShape2D.Circle(0.5f), Vector2.Zero, 0f, ColliderMaterial.Default, layer, false) }, position, 0f, mass);

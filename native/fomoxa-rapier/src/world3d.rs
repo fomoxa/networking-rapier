@@ -1,13 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::slice;
 
+use rapier3d::parry::query::{self, ShapeCastOptions};
 use rapier3d::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::contact::{collider_ref, collider_tag, write_refs, FrColliderRef};
 use crate::hash::StableHasher;
+use crate::query::FrQueryFilter;
 
-const SNAPSHOT_FORMAT: u32 = 2;
+const SNAPSHOT_FORMAT: u32 = 3;
 const ALL_LAYERS: u32 = u32::MAX;
 
 const LOCK_POSITION_X: u32 = 1;
@@ -66,6 +68,15 @@ pub struct FrRayHit {
     pub distance: f32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FrQueryShape {
+    pub shape: u32,
+    pub half_extents: [f32; 3],
+    pub radius: f32,
+    pub half_height: f32,
+}
+
 #[derive(Clone)]
 enum ShapeRecipe {
     Box([f32; 3]),
@@ -117,6 +128,7 @@ struct SnapshotRef<'a> {
     world: &'a PhysicsWorld,
     handles: Vec<(u32, u32, u32)>,
     statics: Vec<(u32, u32, u32)>,
+    dirty: Vec<(u32, u32)>,
 }
 
 #[derive(Deserialize)]
@@ -125,6 +137,7 @@ struct Snapshot {
     world: PhysicsWorld,
     handles: Vec<(u32, u32, u32)>,
     statics: Vec<(u32, u32, u32)>,
+    dirty: Vec<(u32, u32)>,
 }
 
 pub struct World {
@@ -137,6 +150,7 @@ pub struct World {
     scratch: Vec<u8>,
     written: BTreeSet<u32>,
     moved: Vec<u32>,
+    dirty: BTreeSet<(u32, u32)>,
 }
 
 impl World {
@@ -153,12 +167,14 @@ impl World {
             scratch: Vec::new(),
             written: BTreeSet::new(),
             moved: Vec::new(),
+            dirty: BTreeSet::new(),
         }
     }
 
     fn step(&mut self, seconds: f32) {
         self.physics.integration_parameters.dt = seconds;
         self.physics.step();
+        self.dirty.clear();
         for entry in self.bodies.values() {
             if let Some(body) = self.physics.bodies.get_mut(entry.handle) {
                 body.reset_forces(false);
@@ -177,6 +193,7 @@ impl World {
         self.next_group += 1;
         for (collider, recipe) in built.into_iter().zip(colliders) {
             let handle = self.physics.insert_collider(collider, None);
+            self.dirty.insert(handle.into_raw_parts());
             self.statics.push(StaticSlot { group, recipe, handle: Some(handle) });
         }
 
@@ -218,7 +235,9 @@ impl World {
                 Some(handle) => self.statics[index].handle = Some(*handle),
                 None => {
                     if let Some(collider) = build_collider(&self.statics[index].recipe, &self.layers, 1.0, collider_tag(0, index as u32)) {
-                        self.statics[index].handle = Some(self.physics.insert_collider(collider, None));
+                        let handle = self.physics.insert_collider(collider, None);
+                        self.dirty.insert(handle.into_raw_parts());
+                        self.statics[index].handle = Some(handle);
                     }
                 }
             }
@@ -256,7 +275,9 @@ impl World {
         let handle = self.physics.insert_body(builder.pose(pose(position, rotation)).user_data(u128::from(id)).build());
         let mut collider_handles = Vec::with_capacity(built.len());
         for collider in built {
-            collider_handles.push(self.physics.insert_collider(collider, Some(handle)));
+            let collider_handle = self.physics.insert_collider(collider, Some(handle));
+            self.dirty.insert(collider_handle.into_raw_parts());
+            collider_handles.push(collider_handle);
         }
 
         if recipe.kind == KIND_DYNAMIC && recipe.mass > 0.0 {
@@ -308,6 +329,7 @@ impl World {
             Some(body) => {
                 apply_state(body, state);
                 self.written.insert(id);
+                self.mark_dirty(id);
                 true
             }
             None => false,
@@ -323,6 +345,14 @@ impl World {
             }
             None => false,
         }
+    }
+
+    fn mark_dirty(&mut self, id: u32) {
+        let colliders: Vec<(u32, u32)> = match self.body(id) {
+            Some(body) => body.colliders().iter().map(|handle| handle.into_raw_parts()).collect(),
+            None => return,
+        };
+        self.dirty.extend(colliders);
     }
 
     fn kind(&self, id: u32) -> Option<u32> {
@@ -358,7 +388,8 @@ impl World {
                 })
             })
             .collect();
-        let snapshot = SnapshotRef { format: SNAPSHOT_FORMAT, world: &self.physics, handles, statics };
+        let dirty = self.dirty.iter().copied().collect();
+        let snapshot = SnapshotRef { format: SNAPSHOT_FORMAT, world: &self.physics, handles, statics, dirty };
         self.scratch = bincode::serialize(&snapshot).unwrap_or_default();
         self.scratch.len()
     }
@@ -385,6 +416,7 @@ impl World {
             .map(|(id, index, generation)| (*id, RigidBodyHandle::from_raw_parts(*index, *generation)))
             .collect();
         self.physics = snapshot.world;
+        self.dirty = snapshot.dirty.into_iter().collect();
         self.restore_statics(&snapshot.statics);
         let entries = std::mem::take(&mut self.bodies);
         let kept: BTreeSet<u32> = entries.keys().copied().collect();
@@ -404,6 +436,8 @@ impl World {
                             body.set_body_type(body_type(kind), true);
                             apply_state(body, &state);
                         }
+
+                        self.mark_dirty(id);
                     }
                 }
                 None => {
@@ -437,16 +471,48 @@ impl World {
         hasher.finish()
     }
 
-    fn raycast(&self, origin: Vector, direction: Vector, max_distance: f32) -> Option<FrRayHit> {
+    fn accepts(&self, collider: &Collider, filter: &FrQueryFilter) -> bool {
+        (filter.include_triggers != 0 || !collider.is_sensor())
+            && collider.collision_groups().memberships.bits() & filter.layer_mask != 0
+            && (filter.exclude_body == 0 || self.owner_of_collider(collider) != filter.exclude_body)
+    }
+
+    fn with_pipeline<T>(&self, filter: &FrQueryFilter, bodies_only: bool, run: impl FnOnce(&QueryPipeline) -> T) -> T {
+        let predicate = |handle: ColliderHandle, collider: &Collider| {
+            !self.dirty.contains(&handle.into_raw_parts())
+                && self.accepts(collider, filter)
+                && (!bodies_only || self.owner_of_collider(collider) != 0)
+        };
+        let pipeline = self.physics.broad_phase.as_query_pipeline(
+            self.physics.narrow_phase.query_dispatcher(),
+            &self.physics.bodies,
+            &self.physics.colliders,
+            QueryFilter::new().predicate(&predicate),
+        );
+        run(&pipeline)
+    }
+
+    fn dirty_colliders<'a>(&'a self, filter: &'a FrQueryFilter, bodies_only: bool) -> impl Iterator<Item = (ColliderHandle, &'a Collider, Pose)> + 'a {
+        self.dirty.iter().filter_map(move |(index, generation)| {
+            let handle = ColliderHandle::from_raw_parts(*index, *generation);
+            let collider = self.physics.colliders.get(handle)?;
+            if self.accepts(collider, filter) && (!bodies_only || self.owner_of_collider(collider) != 0) {
+                Some((handle, collider, self.pose_of(collider)))
+            } else {
+                None
+            }
+        })
+    }
+
+    fn raycast(&self, origin: Vector, direction: Vector, max_distance: f32, filter: &FrQueryFilter) -> Option<FrRayHit> {
         let length = direction.length();
         if length == 0.0 {
             return None;
         }
 
         let ray = Ray::new(origin, direction / length);
-        let mut best: Option<(ColliderHandle, RayIntersection)> = None;
-        for (handle, collider) in self.physics.colliders.iter() {
-            let pose = self.pose_of(collider);
+        let mut best = self.with_pipeline(filter, false, |pipeline| pipeline.cast_ray_and_get_normal(&ray, max_distance, true));
+        for (handle, collider, pose) in self.dirty_colliders(filter, false) {
             if let Some(hit) = collider.shape().cast_ray_and_get_normal(&pose, &ray, max_distance, true) {
                 if best.map_or(true, |(_, found)| hit.time_of_impact < found.time_of_impact) {
                     best = Some((handle, hit));
@@ -464,19 +530,51 @@ impl World {
         })
     }
 
-    fn overlap(&self, center: Vector, radius: f32) -> Vec<u32> {
-        let ball = Ball::new(radius);
-        let ball_pose = Pose::from_translation(center);
-        let mut found = BTreeSet::new();
-        for (handle, collider) in self.physics.colliders.iter() {
-            let owner = self.owner_of(handle);
-            if owner == 0 || found.contains(&owner) {
-                continue;
-            }
+    fn shape_cast(&self, shape: &dyn Shape, shape_pose: Pose, direction: Vector, max_distance: f32, filter: &FrQueryFilter) -> Option<FrRayHit> {
+        let length = direction.length();
+        if length == 0.0 {
+            return None;
+        }
 
-            let pose = self.pose_of(collider);
-            if rapier3d::parry::query::intersection_test(&ball_pose, &ball, &pose, collider.shape()).is_ok_and(|hit| hit.intersecting) {
-                found.insert(owner);
+        let velocity = direction / length;
+        let options = ShapeCastOptions {
+            max_time_of_impact: max_distance,
+            target_distance: 0.0,
+            stop_at_penetration: true,
+            compute_impact_geometry_on_penetration: true,
+        };
+        let mut best = self.with_pipeline(filter, false, |pipeline| {
+            pipeline
+                .cast_shape(&shape_pose, velocity, shape, options)
+                .map(|(handle, hit)| (handle, hit.time_of_impact, hit.witness1, hit.normal1))
+        });
+        for (handle, collider, pose) in self.dirty_colliders(filter, false) {
+            if let Ok(Some(hit)) = query::cast_shapes(&pose, Vector::ZERO, collider.shape(), &shape_pose, velocity, shape, options) {
+                if best.map_or(true, |(_, found, _, _)| hit.time_of_impact < found) {
+                    best = Some((handle, hit.time_of_impact, pose * hit.witness1, pose.rotation * hit.normal1));
+                }
+            }
+        }
+
+        let (collider, distance, point, normal) = best?;
+        Some(FrRayHit {
+            body: self.owner_of(collider),
+            point: [point.x, point.y, point.z],
+            normal: [normal.x, normal.y, normal.z],
+            distance,
+        })
+    }
+
+    fn overlap(&self, shape: &dyn Shape, shape_pose: Pose, filter: &FrQueryFilter) -> Vec<u32> {
+        let mut found = BTreeSet::new();
+        self.with_pipeline(filter, true, |pipeline| {
+            for (handle, _) in pipeline.intersect_shape(shape_pose, shape) {
+                found.insert(self.owner_of(handle));
+            }
+        });
+        for (handle, collider, pose) in self.dirty_colliders(filter, true) {
+            if query::intersection_test(&shape_pose, shape, &pose, collider.shape()).is_ok_and(|hit| hit.intersecting) {
+                found.insert(self.owner_of(handle));
             }
         }
 
@@ -535,10 +633,12 @@ impl World {
     }
 
     fn owner_of(&self, collider: ColliderHandle) -> u32 {
-        self.physics
-            .colliders
-            .get(collider)
-            .and_then(|collider| collider.parent())
+        self.physics.colliders.get(collider).map_or(0, |collider| self.owner_of_collider(collider))
+    }
+
+    fn owner_of_collider(&self, collider: &Collider) -> u32 {
+        collider
+            .parent()
             .and_then(|parent| self.physics.bodies.get(parent))
             .map(|body| body.user_data as u32)
             .unwrap_or(0)
@@ -895,27 +995,35 @@ pub unsafe extern "C" fn fr_body_add_impulse(world_ptr: *mut World, body: u32, x
     }
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn fr_world_raycast(
-    world_ptr: *mut World,
-    origin: *const f32,
-    direction: *const f32,
-    max_distance: f32,
-    hit: *mut FrRayHit,
-) -> bool {
-    if origin.is_null() || direction.is_null() {
-        return false;
+fn query_shape(shape: &FrQueryShape) -> Option<SharedShape> {
+    match shape.shape {
+        SHAPE_BOX => Some(SharedShape::cuboid(shape.half_extents[0], shape.half_extents[1], shape.half_extents[2])),
+        SHAPE_SPHERE => Some(SharedShape::ball(shape.radius)),
+        SHAPE_CAPSULE => Some(SharedShape::capsule_y(shape.half_height, shape.radius)),
+        _ => None,
+    }
+}
+
+unsafe fn read_vector(values: *const f32) -> Option<Vector> {
+    if values.is_null() {
+        return None;
     }
 
-    let origin = slice::from_raw_parts(origin, 3);
-    let direction = slice::from_raw_parts(direction, 3);
-    let found = world(world_ptr).and_then(|world| {
-        world.raycast(
-            Vector::new(origin[0], origin[1], origin[2]),
-            Vector::new(direction[0], direction[1], direction[2]),
-            max_distance,
-        )
-    });
+    let values = slice::from_raw_parts(values, 3);
+    Some(Vector::new(values[0], values[1], values[2]))
+}
+
+unsafe fn read_pose(position: *const f32, rotation: *const f32) -> Option<Pose> {
+    if position.is_null() || rotation.is_null() {
+        return None;
+    }
+
+    let position = slice::from_raw_parts(position, 3);
+    let rotation = slice::from_raw_parts(rotation, 4);
+    Some(pose([position[0], position[1], position[2]], [rotation[0], rotation[1], rotation[2], rotation[3]]))
+}
+
+unsafe fn write_hit(found: Option<FrRayHit>, hit: *mut FrRayHit) -> bool {
     match (found, hit.as_mut()) {
         (Some(found), Some(out)) => {
             *out = found;
@@ -926,10 +1034,60 @@ pub unsafe extern "C" fn fr_world_raycast(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn fr_world_overlap(world_ptr: *mut World, x: f32, y: f32, z: f32, radius: f32, bodies: *mut u32, capacity: u32) -> u32 {
-    let found = match world(world_ptr) {
-        Some(world) => world.overlap(Vector::new(x, y, z), radius),
+pub unsafe extern "C" fn fr_world_raycast(
+    world_ptr: *mut World,
+    origin: *const f32,
+    direction: *const f32,
+    max_distance: f32,
+    filter: *const FrQueryFilter,
+    hit: *mut FrRayHit,
+) -> bool {
+    let found = match (world(world_ptr), read_vector(origin), read_vector(direction), filter.as_ref()) {
+        (Some(world), Some(origin), Some(direction), Some(filter)) => world.raycast(origin, direction, max_distance, filter),
+        _ => None,
+    };
+    write_hit(found, hit)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fr_world_shape_cast(
+    world_ptr: *mut World,
+    shape: *const FrQueryShape,
+    position: *const f32,
+    rotation: *const f32,
+    direction: *const f32,
+    max_distance: f32,
+    filter: *const FrQueryFilter,
+    hit: *mut FrRayHit,
+) -> bool {
+    let shape = match shape.as_ref().and_then(query_shape) {
+        Some(shape) => shape,
+        None => return false,
+    };
+    let found = match (world(world_ptr), read_pose(position, rotation), read_vector(direction), filter.as_ref()) {
+        (Some(world), Some(shape_pose), Some(direction), Some(filter)) => world.shape_cast(&*shape, shape_pose, direction, max_distance, filter),
+        _ => None,
+    };
+    write_hit(found, hit)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fr_world_overlap(
+    world_ptr: *mut World,
+    shape: *const FrQueryShape,
+    position: *const f32,
+    rotation: *const f32,
+    filter: *const FrQueryFilter,
+    bodies: *mut u32,
+    capacity: u32,
+) -> u32 {
+    let shape = match shape.as_ref().and_then(query_shape) {
+        Some(shape) => shape,
         None => return 0,
+    };
+    let found = match (world(world_ptr), read_pose(position, rotation), filter.as_ref()) {
+        (Some(world), Some(shape_pose), Some(filter)) => world.overlap(&*shape, shape_pose, filter),
+        _ => return 0,
     };
     let count = found.len().min(capacity as usize);
     if count > 0 && !bodies.is_null() {
