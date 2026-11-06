@@ -20,6 +20,7 @@ The order of authority is the same as in the `unity` repository: `design/` of th
 | 11.29 | Release 0.1.1 with `com.fomoxa.networking` 0.2.0 | [`11-29-release.md`](11-29-release.md) | ✅ |
 | 12.1 | Libraries for every platform, built in CI, golden hashes | [`12-1-native-platforms.md`](12-1-native-platforms.md) | ✅ |
 | 12.2 | Golden hashes inside Unity players | [`12-2-player-check.md`](12-2-player-check.md) | ✅ |
+| 12.3 | Query filter, shape casts, shape overlaps, query pipeline | [`12-3-queries.md`](12-3-queries.md) | ✅ |
 | — | CI | — | not yet: how CI gets the Core is not decided |
 
 The part shared by every backend (the public physics interface, `NetworkPhysics`, body colliders, the collider converter, scene files, console backend physics, the contact source plug-in point) is done in the `unity` repository, in steps 08.8 to 08.12 and the `Fomoxa.Unity` part of 08.15.
