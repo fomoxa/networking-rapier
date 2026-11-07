@@ -102,7 +102,7 @@ namespace Fomoxa.Networking.Rapier
             using (var native = new RapierColliders(desc.Colliders))
             {
                 BodyMotion motion = desc.Motion;
-                id = RapierNative.fr_body_create(world, (uint)desc.Kind, position, rotation, desc.Mass, (uint)motion.Locks, motion.UseGravity ? 1f : 0f, motion.LinearDamping, motion.AngularDamping, native.Native, (uint)native.Native.Length);
+                id = RapierNative.fr_body_create(world, (uint)desc.Kind, position, rotation, desc.Mass, (uint)motion.Locks, motion.UseGravity ? 1f : 0f, motion.LinearDamping, motion.AngularDamping, motion.ContinuousCollision, native.Native, (uint)native.Native.Length);
             }
 
             if (id == 0)
@@ -201,6 +201,38 @@ namespace Fomoxa.Networking.Rapier
         public void AddImpulse(BodyHandle body, Vector3 impulse)
         {
             if (!RapierNative.fr_body_add_impulse(world, Id(body), impulse.X, impulse.Y, impulse.Z))
+            {
+                throw Missing(body);
+            }
+        }
+
+        public void AddTorque(BodyHandle body, Vector3 torque)
+        {
+            if (!RapierNative.fr_body_add_torque(world, Id(body), torque.X, torque.Y, torque.Z))
+            {
+                throw Missing(body);
+            }
+        }
+
+        public void AddTorqueImpulse(BodyHandle body, Vector3 torqueImpulse)
+        {
+            if (!RapierNative.fr_body_add_torque_impulse(world, Id(body), torqueImpulse.X, torqueImpulse.Y, torqueImpulse.Z))
+            {
+                throw Missing(body);
+            }
+        }
+
+        public void AddForceAtPoint(BodyHandle body, Vector3 force, Vector3 point)
+        {
+            if (!RapierNative.fr_body_add_force_at_point(world, Id(body), force.X, force.Y, force.Z, point.X, point.Y, point.Z))
+            {
+                throw Missing(body);
+            }
+        }
+
+        public void AddImpulseAtPoint(BodyHandle body, Vector3 impulse, Vector3 point)
+        {
+            if (!RapierNative.fr_body_add_impulse_at_point(world, Id(body), impulse.X, impulse.Y, impulse.Z, point.X, point.Y, point.Z))
             {
                 throw Missing(body);
             }

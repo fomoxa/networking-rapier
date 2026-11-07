@@ -171,7 +171,7 @@ namespace Fomoxa.Networking.Rapier
         internal static extern bool fr_world_remove_static(IntPtr world, uint group);
 
         [DllImport(Library)]
-        internal static extern uint fr_body_create(IntPtr world, uint kind, float[] position, float[] rotation, float mass, uint locks, float gravityScale, float linearDamping, float angularDamping, Collider[] colliders, uint count);
+        internal static extern uint fr_body_create(IntPtr world, uint kind, float[] position, float[] rotation, float mass, uint locks, float gravityScale, float linearDamping, float angularDamping, [MarshalAs(UnmanagedType.U1)] bool continuousCollision, Collider[] colliders, uint count);
 
         [DllImport(Library)]
         [return: MarshalAs(UnmanagedType.U1)]
@@ -210,6 +210,22 @@ namespace Fomoxa.Networking.Rapier
         [DllImport(Library)]
         [return: MarshalAs(UnmanagedType.U1)]
         internal static extern bool fr_body_add_impulse(IntPtr world, uint body, float x, float y, float z);
+
+        [DllImport(Library)]
+        [return: MarshalAs(UnmanagedType.U1)]
+        internal static extern bool fr_body_add_torque(IntPtr world, uint body, float x, float y, float z);
+
+        [DllImport(Library)]
+        [return: MarshalAs(UnmanagedType.U1)]
+        internal static extern bool fr_body_add_torque_impulse(IntPtr world, uint body, float x, float y, float z);
+
+        [DllImport(Library)]
+        [return: MarshalAs(UnmanagedType.U1)]
+        internal static extern bool fr_body_add_force_at_point(IntPtr world, uint body, float forceX, float forceY, float forceZ, float pointX, float pointY, float pointZ);
+
+        [DllImport(Library)]
+        [return: MarshalAs(UnmanagedType.U1)]
+        internal static extern bool fr_body_add_impulse_at_point(IntPtr world, uint body, float impulseX, float impulseY, float impulseZ, float pointX, float pointY, float pointZ);
 
         [DllImport(Library)]
         [return: MarshalAs(UnmanagedType.U1)]
@@ -309,7 +325,7 @@ namespace Fomoxa.Networking.Rapier
         internal static extern bool fr2_world_remove_static(IntPtr world, uint group);
 
         [DllImport(Library)]
-        internal static extern uint fr2_body_create(IntPtr world, uint kind, float x, float y, float rotation, float mass, uint locks, float gravityScale, float linearDamping, float angularDamping, Collider2D[] colliders, uint count);
+        internal static extern uint fr2_body_create(IntPtr world, uint kind, float x, float y, float rotation, float mass, uint locks, float gravityScale, float linearDamping, float angularDamping, [MarshalAs(UnmanagedType.U1)] bool continuousCollision, Collider2D[] colliders, uint count);
 
         [DllImport(Library)]
         [return: MarshalAs(UnmanagedType.U1)]
@@ -348,6 +364,22 @@ namespace Fomoxa.Networking.Rapier
         [DllImport(Library)]
         [return: MarshalAs(UnmanagedType.U1)]
         internal static extern bool fr2_body_add_impulse(IntPtr world, uint body, float x, float y);
+
+        [DllImport(Library)]
+        [return: MarshalAs(UnmanagedType.U1)]
+        internal static extern bool fr2_body_add_torque(IntPtr world, uint body, float torque);
+
+        [DllImport(Library)]
+        [return: MarshalAs(UnmanagedType.U1)]
+        internal static extern bool fr2_body_add_torque_impulse(IntPtr world, uint body, float torqueImpulse);
+
+        [DllImport(Library)]
+        [return: MarshalAs(UnmanagedType.U1)]
+        internal static extern bool fr2_body_add_force_at_point(IntPtr world, uint body, float forceX, float forceY, float pointX, float pointY);
+
+        [DllImport(Library)]
+        [return: MarshalAs(UnmanagedType.U1)]
+        internal static extern bool fr2_body_add_impulse_at_point(IntPtr world, uint body, float impulseX, float impulseY, float pointX, float pointY);
 
         [DllImport(Library)]
         [return: MarshalAs(UnmanagedType.U1)]

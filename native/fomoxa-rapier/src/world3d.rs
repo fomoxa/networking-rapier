@@ -107,6 +107,7 @@ struct BodyRecipe {
     gravity_scale: f32,
     linear_damping: f32,
     angular_damping: f32,
+    ccd: bool,
     colliders: Vec<ColliderRecipe>,
 }
 
@@ -178,6 +179,7 @@ impl World {
         for entry in self.bodies.values() {
             if let Some(body) = self.physics.bodies.get_mut(entry.handle) {
                 body.reset_forces(false);
+                body.reset_torques(false);
             }
         }
     }
@@ -271,7 +273,8 @@ impl World {
             .locked_axes(locked_axes(recipe.locks))
             .gravity_scale(recipe.gravity_scale)
             .linear_damping(recipe.linear_damping)
-            .angular_damping(recipe.angular_damping);
+            .angular_damping(recipe.angular_damping)
+            .ccd_enabled(recipe.ccd);
         let handle = self.physics.insert_body(builder.pose(pose(position, rotation)).user_data(u128::from(id)).build());
         let mut collider_handles = Vec::with_capacity(built.len());
         for collider in built {
@@ -894,6 +897,7 @@ pub unsafe extern "C" fn fr_body_create(
     gravity_scale: f32,
     linear_damping: f32,
     angular_damping: f32,
+    ccd: bool,
     colliders: *const FrCollider,
     count: u32,
 ) -> u32 {
@@ -912,7 +916,7 @@ pub unsafe extern "C" fn fr_body_create(
     let position = slice::from_raw_parts(position, 3);
     let rotation = slice::from_raw_parts(rotation, 4);
     world.create_body(
-        BodyRecipe { kind: kind.min(KIND_STATIC), mass, locks, gravity_scale, linear_damping, angular_damping, colliders: recipes },
+        BodyRecipe { kind: kind.min(KIND_STATIC), mass, locks, gravity_scale, linear_damping, angular_damping, ccd, colliders: recipes },
         [position[0], position[1], position[2]],
         [rotation[0], rotation[1], rotation[2], rotation[3]],
     )
@@ -989,6 +993,50 @@ pub unsafe extern "C" fn fr_body_add_impulse(world_ptr: *mut World, body: u32, x
     match world(world_ptr).and_then(|world| world.body_mut(body)) {
         Some(body) => {
             body.apply_impulse(Vector::new(x, y, z), true);
+            true
+        }
+        None => false,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fr_body_add_torque(world_ptr: *mut World, body: u32, x: f32, y: f32, z: f32) -> bool {
+    match world(world_ptr).and_then(|world| world.body_mut(body)) {
+        Some(body) => {
+            body.add_torque(Vector::new(x, y, z), true);
+            true
+        }
+        None => false,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fr_body_add_torque_impulse(world_ptr: *mut World, body: u32, x: f32, y: f32, z: f32) -> bool {
+    match world(world_ptr).and_then(|world| world.body_mut(body)) {
+        Some(body) => {
+            body.apply_torque_impulse(Vector::new(x, y, z), true);
+            true
+        }
+        None => false,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fr_body_add_force_at_point(world_ptr: *mut World, body: u32, fx: f32, fy: f32, fz: f32, px: f32, py: f32, pz: f32) -> bool {
+    match world(world_ptr).and_then(|world| world.body_mut(body)) {
+        Some(body) => {
+            body.add_force_at_point(Vector::new(fx, fy, fz), Vector::new(px, py, pz), true);
+            true
+        }
+        None => false,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fr_body_add_impulse_at_point(world_ptr: *mut World, body: u32, ix: f32, iy: f32, iz: f32, px: f32, py: f32, pz: f32) -> bool {
+    match world(world_ptr).and_then(|world| world.body_mut(body)) {
+        Some(body) => {
+            body.apply_impulse_at_point(Vector::new(ix, iy, iz), Vector::new(px, py, pz), true);
             true
         }
         None => false,

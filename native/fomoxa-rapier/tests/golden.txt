@@ -12,6 +12,8 @@
 3d overlap 7 12,17,18,38,53,58,59
 3d moved true 1 411b3333
 3d inside true 1 00000000
+3d forces 9315263bb5c7e4dc
+3d ccd 434be948 43660000
 2d 150 c97da396a3cb0eea
 2d 300 e2c22756c345bdb9
 2d 450 a1e601e5c3be3030
@@ -26,3 +28,5 @@
 2d overlap 12 4,5,6,13,22,32,41,48,49,50,58,59
 2d moved true 1 411b3333
 2d inside true 1 00000000
+2d forces 38996e21096ba246
+2d ccd 434be948 43660000

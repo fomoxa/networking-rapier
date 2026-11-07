@@ -8,6 +8,8 @@ const SNAPSHOT_AT: u32 = 450;
 const SECONDS: f32 = 1.0 / 30.0;
 const IDENTITY: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 const TURNED: [f32; 4] = [0.6, 0.0, 0.0, 0.8];
+const FORCE_STEPS: u32 = 60;
+const CCD_STEPS: u32 = 3;
 const ALL: FrQueryFilter = FrQueryFilter { layer_mask: u32::MAX, exclude_body: 0, include_triggers: 1 };
 
 fn collider(shape: u32, half_extents: [f32; 3], radius: f32, half_height: f32, points: &[f32], triangles: &[u32]) -> FrCollider {
@@ -147,6 +149,53 @@ unsafe fn queries_2d(world: *mut World2D, moved: u32) {
     ray_2d(world, "inside", [20.0, 30.0], [0.0, -1.0], &ALL);
 }
 
+unsafe fn position_3d(world: *mut World, body: u32) -> [f32; 3] {
+    let mut state = FrBodyState { position: [0.0; 3], rotation: IDENTITY, velocity: [0.0; 3], angular_velocity: [0.0; 3] };
+    assert!(fr_body_get(world, body, &mut state));
+    state.position
+}
+
+unsafe fn forces_3d(world: *mut World, bodies: &[u32]) {
+    let count = bodies.len();
+    for tick in 1..=FORCE_STEPS as usize {
+        fr_body_add_torque(world, bodies[tick % count], 0.5, -1.25, 0.75);
+        let pushed = bodies[tick * 5 % count];
+        let at = position_3d(world, pushed);
+        fr_body_add_force_at_point(world, pushed, 3.0, 0.0, -1.5, at[0] + 0.3, at[1] + 0.2, at[2] + 0.1);
+        if tick % 10 == 0 {
+            fr_body_add_torque_impulse(world, bodies[tick * 7 % count], 0.25, 0.5, -0.125);
+            let struck = bodies[tick * 11 % count];
+            let at = position_3d(world, struck);
+            fr_body_add_impulse_at_point(world, struck, 0.5, 1.0, 0.0, at[0] - 0.2, at[1], at[2] + 0.3);
+        }
+
+        fr_world_step(world, SECONDS);
+    }
+
+    println!("3d forces {:016x}", fr_world_hash(world));
+}
+
+unsafe fn ccd_ball_3d(world: *mut World, z: f32, ccd: bool) -> u32 {
+    let ball = collider(1, [0.0; 3], 0.1, 0.0, &[], &[]);
+    let position = [200.0, 50.0, z];
+    let body = fr_body_create(world, 0, position.as_ptr(), IDENTITY.as_ptr(), 1.0, 0, 0.0, 0.0, 0.0, ccd, &ball, 1);
+    fr_body_add_impulse(world, body, 300.0, 0.0, 0.0);
+    body
+}
+
+unsafe fn ccd_3d(world: *mut World) {
+    let wall = collider(0, [0.05, 2.0, 2.0], 0.0, 0.0, &[], &[]);
+    let at = [205.0, 50.0, 0.0];
+    fr_body_create(world, 1, at.as_ptr(), IDENTITY.as_ptr(), 0.0, 0, 0.0, 0.0, 0.0, false, &wall, 1);
+    let continuous = ccd_ball_3d(world, -1.0, true);
+    let discrete = ccd_ball_3d(world, 1.0, false);
+    for _ in 0..CCD_STEPS {
+        fr_world_step(world, SECONDS);
+    }
+
+    println!("3d ccd {:08x} {:08x}", position_3d(world, continuous)[0].to_bits(), position_3d(world, discrete)[0].to_bits());
+}
+
 unsafe fn run_3d() {
     let world = fr_world_create(0.0, -9.81, 0.0);
     let ground_points = [-50.0, 0.0, -50.0, 50.0, 2.0, -50.0, 50.0, 0.0, 50.0, -50.0, 3.0, 50.0];
@@ -167,7 +216,7 @@ unsafe fn run_3d() {
             _ => collider(3, [0.0; 3], 0.0, 0.0, &hull_points, &[]),
         };
         let mass = 1.0 + index as f32 * 0.0625;
-        bodies.push(fr_body_create(world, 0, position.as_ptr(), rotation.as_ptr(), mass, 0, 1.0, 0.02, 0.03, &shape, 1));
+        bodies.push(fr_body_create(world, 0, position.as_ptr(), rotation.as_ptr(), mass, 0, 1.0, 0.02, 0.03, false, &shape, 1));
     }
 
     let mut saved = Vec::new();
@@ -195,7 +244,54 @@ unsafe fn run_3d() {
     println!("3d replay {}", fr_world_hash(world) == at_end);
 
     queries_3d(world, bodies[0]);
+    forces_3d(world, &bodies);
+    ccd_3d(world);
     fr_world_destroy(world);
+}
+
+unsafe fn position_2d(world: *mut World2D, body: u32) -> [f32; 2] {
+    let mut state = FrBodyState2D { position: [0.0; 2], rotation: 0.0, velocity: [0.0; 2], angular_velocity: 0.0 };
+    assert!(fr2_body_get(world, body, &mut state));
+    state.position
+}
+
+unsafe fn forces_2d(world: *mut World2D, bodies: &[u32]) {
+    let count = bodies.len();
+    for tick in 1..=FORCE_STEPS as usize {
+        fr2_body_add_torque(world, bodies[tick % count], -0.75);
+        let pushed = bodies[tick * 5 % count];
+        let at = position_2d(world, pushed);
+        fr2_body_add_force_at_point(world, pushed, 3.0, -1.5, at[0] + 0.3, at[1] + 0.2);
+        if tick % 10 == 0 {
+            fr2_body_add_torque_impulse(world, bodies[tick * 7 % count], 0.25);
+            let struck = bodies[tick * 11 % count];
+            let at = position_2d(world, struck);
+            fr2_body_add_impulse_at_point(world, struck, 0.5, 1.0, at[0] - 0.2, at[1] + 0.3);
+        }
+
+        fr2_world_step(world, SECONDS);
+    }
+
+    println!("2d forces {:016x}", fr2_world_hash(world));
+}
+
+unsafe fn ccd_ball_2d(world: *mut World2D, y: f32, ccd: bool) -> u32 {
+    let ball = collider_2d(1, [0.0; 2], 0.1, 0.0, &[]);
+    let body = fr2_body_create(world, 0, 200.0, y, 0.0, 1.0, 0, 0.0, 0.0, 0.0, ccd, &ball, 1);
+    fr2_body_add_impulse(world, body, 300.0, 0.0);
+    body
+}
+
+unsafe fn ccd_2d(world: *mut World2D) {
+    let wall = collider_2d(0, [0.05, 2.0], 0.0, 0.0, &[]);
+    fr2_body_create(world, 1, 205.0, 50.0, 0.0, 0.0, 0, 0.0, 0.0, 0.0, false, &wall, 1);
+    let continuous = ccd_ball_2d(world, 49.0, true);
+    let discrete = ccd_ball_2d(world, 51.0, false);
+    for _ in 0..CCD_STEPS {
+        fr2_world_step(world, SECONDS);
+    }
+
+    println!("2d ccd {:08x} {:08x}", position_2d(world, continuous)[0].to_bits(), position_2d(world, discrete)[0].to_bits());
 }
 
 unsafe fn run_2d() {
@@ -217,7 +313,7 @@ unsafe fn run_2d() {
             _ => collider_2d(3, [0.0; 2], 0.0, 0.0, &polygon_points),
         };
         let mass = 1.0 + index as f32 * 0.0625;
-        bodies.push(fr2_body_create(world, 0, x, y, index as f32 * 0.125, mass, 0, 1.0, 0.02, 0.03, &shape, 1));
+        bodies.push(fr2_body_create(world, 0, x, y, index as f32 * 0.125, mass, 0, 1.0, 0.02, 0.03, false, &shape, 1));
     }
 
     let mut saved = Vec::new();
@@ -244,6 +340,8 @@ unsafe fn run_2d() {
 
     println!("2d replay {}", fr2_world_hash(world) == at_end);
     queries_2d(world, bodies[0]);
+    forces_2d(world, &bodies);
+    ccd_2d(world);
     fr2_world_destroy(world);
 }
 

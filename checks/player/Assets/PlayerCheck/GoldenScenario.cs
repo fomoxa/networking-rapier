@@ -13,6 +13,8 @@ namespace Fomoxa.Rapier.PlayerCheck
         private const int SnapshotAt = 450;
         private const int BodyCount = 60;
         private const float Seconds = 1f / 30f;
+        private const int ForceSteps = 60;
+        private const int CcdSteps = 3;
 
         private static readonly ColliderMaterial Material = new ColliderMaterial(0.6f, 0.1f, CombineRule.Average, CombineRule.Average);
         private static readonly Quaternion Turned = new Quaternion(0.6f, 0f, 0f, 0.8f);
@@ -73,6 +75,8 @@ namespace Fomoxa.Rapier.PlayerCheck
 
                 lines.Add($"3d replay {Flag(world.StateHash == atEnd)}");
                 Queries3D(world, bodies[0], lines);
+                Forces3D(world, bodies, lines);
+                Ccd3D(world, lines);
             }
         }
 
@@ -122,6 +126,8 @@ namespace Fomoxa.Rapier.PlayerCheck
 
                 lines.Add($"2d replay {Flag(world.StateHash == atEnd)}");
                 Queries2D(world, bodies[0], lines);
+                Forces2D(world, bodies, lines);
+                Ccd2D(world, lines);
             }
         }
 
@@ -163,6 +169,90 @@ namespace Fomoxa.Rapier.PlayerCheck
             world.SetBody(moved, new BodyState2D { Position = new Vector2(20f, 30f) });
             Ray2D(world, "moved", new Vector2(20f, 40f), new Vector2(0f, -1f), QueryFilter.All, lines);
             Ray2D(world, "inside", new Vector2(20f, 30f), new Vector2(0f, -1f), QueryFilter.All, lines);
+        }
+
+        private static void Forces3D(RapierWorld world, BodyHandle[] bodies, List<string> lines)
+        {
+            for (int tick = 1; tick <= ForceSteps; tick++)
+            {
+                world.AddTorque(bodies[tick % bodies.Length], new Vector3(0.5f, -1.25f, 0.75f));
+                BodyHandle pushed = bodies[tick * 5 % bodies.Length];
+                world.AddForceAtPoint(pushed, new Vector3(3f, 0f, -1.5f), world.GetBody(pushed).Position + new Vector3(0.3f, 0.2f, 0.1f));
+                if (tick % 10 == 0)
+                {
+                    world.AddTorqueImpulse(bodies[tick * 7 % bodies.Length], new Vector3(0.25f, 0.5f, -0.125f));
+                    BodyHandle struck = bodies[tick * 11 % bodies.Length];
+                    world.AddImpulseAtPoint(struck, new Vector3(0.5f, 1f, 0f), world.GetBody(struck).Position + new Vector3(-0.2f, 0f, 0.3f));
+                }
+
+                world.Step(Seconds);
+            }
+
+            lines.Add($"3d forces {world.StateHash:x16}");
+        }
+
+        private static void Forces2D(RapierWorld2D world, BodyHandle[] bodies, List<string> lines)
+        {
+            for (int tick = 1; tick <= ForceSteps; tick++)
+            {
+                world.AddTorque(bodies[tick % bodies.Length], -0.75f);
+                BodyHandle pushed = bodies[tick * 5 % bodies.Length];
+                world.AddForceAtPoint(pushed, new Vector2(3f, -1.5f), world.GetBody(pushed).Position + new Vector2(0.3f, 0.2f));
+                if (tick % 10 == 0)
+                {
+                    world.AddTorqueImpulse(bodies[tick * 7 % bodies.Length], 0.25f);
+                    BodyHandle struck = bodies[tick * 11 % bodies.Length];
+                    world.AddImpulseAtPoint(struck, new Vector2(0.5f, 1f), world.GetBody(struck).Position + new Vector2(-0.2f, 0.3f));
+                }
+
+                world.Step(Seconds);
+            }
+
+            lines.Add($"2d forces {world.StateHash:x16}");
+        }
+
+        private static void Ccd3D(RapierWorld world, List<string> lines)
+        {
+            var still = new BodyMotion(BodyLocks.None, false, 0f, 0f);
+            world.CreateBody(new BodyDesc(BodyKind.Kinematic, new[] { Collider(BodyShape.Box(new Vector3(0.05f, 2f, 2f))) }, new Vector3(205f, 50f, 0f), Quaternion.Identity, 0f, still));
+            BodyHandle continuous = CcdBall3D(world, -1f, true);
+            BodyHandle discrete = CcdBall3D(world, 1f, false);
+            for (int tick = 0; tick < CcdSteps; tick++)
+            {
+                world.Step(Seconds);
+            }
+
+            lines.Add($"3d ccd {Bits(world.GetBody(continuous).Position.X)} {Bits(world.GetBody(discrete).Position.X)}");
+        }
+
+        private static void Ccd2D(RapierWorld2D world, List<string> lines)
+        {
+            var still = new BodyMotion2D(BodyLocks2D.None, 0f, 0f, 0f);
+            world.CreateBody(new BodyDesc2D(BodyKind.Kinematic, new[] { Collider(BodyShape2D.Box(new Vector2(0.05f, 2f))) }, new Vector2(205f, 50f), 0f, 0f, still));
+            BodyHandle continuous = CcdBall2D(world, 49f, true);
+            BodyHandle discrete = CcdBall2D(world, 51f, false);
+            for (int tick = 0; tick < CcdSteps; tick++)
+            {
+                world.Step(Seconds);
+            }
+
+            lines.Add($"2d ccd {Bits(world.GetBody(continuous).Position.X)} {Bits(world.GetBody(discrete).Position.X)}");
+        }
+
+        private static BodyHandle CcdBall3D(RapierWorld world, float z, bool continuous)
+        {
+            var motion = new BodyMotion(BodyLocks.None, false, 0f, 0f, continuous);
+            BodyHandle ball = world.CreateBody(new BodyDesc(BodyKind.Dynamic, new[] { Collider(BodyShape.Sphere(0.1f)) }, new Vector3(200f, 50f, z), Quaternion.Identity, 1f, motion));
+            world.AddImpulse(ball, new Vector3(300f, 0f, 0f));
+            return ball;
+        }
+
+        private static BodyHandle CcdBall2D(RapierWorld2D world, float y, bool continuous)
+        {
+            var motion = new BodyMotion2D(BodyLocks2D.None, 0f, 0f, 0f, continuous);
+            BodyHandle ball = world.CreateBody(new BodyDesc2D(BodyKind.Dynamic, new[] { Collider(BodyShape2D.Circle(0.1f)) }, new Vector2(200f, y), 0f, 1f, motion));
+            world.AddImpulse(ball, new Vector2(300f, 0f));
+            return ball;
         }
 
         private static RayHit Ray3D(RapierWorld world, string label, Vector3 origin, Vector3 direction, in QueryFilter filter, List<string> lines)

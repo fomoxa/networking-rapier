@@ -100,7 +100,7 @@ namespace Fomoxa.Networking.Rapier
             using (var native = new RapierColliders2D(desc.Colliders))
             {
                 BodyMotion2D motion = desc.Motion;
-                id = RapierNative.fr2_body_create(world, (uint)desc.Kind, desc.Position.X, desc.Position.Y, desc.Rotation, desc.Mass, (uint)motion.Locks, motion.GravityScale, motion.LinearDamping, motion.AngularDamping, native.Native, (uint)native.Native.Length);
+                id = RapierNative.fr2_body_create(world, (uint)desc.Kind, desc.Position.X, desc.Position.Y, desc.Rotation, desc.Mass, (uint)motion.Locks, motion.GravityScale, motion.LinearDamping, motion.AngularDamping, motion.ContinuousCollision, native.Native, (uint)native.Native.Length);
             }
 
             if (id == 0)
@@ -192,6 +192,38 @@ namespace Fomoxa.Networking.Rapier
         public void AddImpulse(BodyHandle body, Vector2 impulse)
         {
             if (!RapierNative.fr2_body_add_impulse(world, Id(body), impulse.X, impulse.Y))
+            {
+                throw Missing(body);
+            }
+        }
+
+        public void AddTorque(BodyHandle body, float torque)
+        {
+            if (!RapierNative.fr2_body_add_torque(world, Id(body), torque))
+            {
+                throw Missing(body);
+            }
+        }
+
+        public void AddTorqueImpulse(BodyHandle body, float torqueImpulse)
+        {
+            if (!RapierNative.fr2_body_add_torque_impulse(world, Id(body), torqueImpulse))
+            {
+                throw Missing(body);
+            }
+        }
+
+        public void AddForceAtPoint(BodyHandle body, Vector2 force, Vector2 point)
+        {
+            if (!RapierNative.fr2_body_add_force_at_point(world, Id(body), force.X, force.Y, point.X, point.Y))
+            {
+                throw Missing(body);
+            }
+        }
+
+        public void AddImpulseAtPoint(BodyHandle body, Vector2 impulse, Vector2 point)
+        {
+            if (!RapierNative.fr2_body_add_impulse_at_point(world, Id(body), impulse.X, impulse.Y, point.X, point.Y))
             {
                 throw Missing(body);
             }

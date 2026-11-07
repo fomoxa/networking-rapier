@@ -585,6 +585,80 @@ namespace Fomoxa.Networking.Rapier.Tests
             }
         }
 
+        [Test]
+        public void ImpulsesChangeTheVelocityAtOnceAndForcesAndTorquesActAtTheNextStep()
+        {
+            using (var world = new RapierWorld(Gravity))
+            {
+                const float inertia = 0.4f * 2f * 0.5f * 0.5f;
+                const float seconds = 0.1f;
+                BodyHandle spun = world.CreateBody(Spinner(BodyKind.Dynamic, 0f));
+                BodyHandle struck = world.CreateBody(Spinner(BodyKind.Dynamic, 10f));
+                BodyHandle twisted = world.CreateBody(Spinner(BodyKind.Dynamic, 20f));
+                BodyHandle pushed = world.CreateBody(Spinner(BodyKind.Dynamic, 30f));
+                BodyHandle carried = world.CreateBody(Spinner(BodyKind.Kinematic, 40f));
+
+                world.AddTorqueImpulse(spun, new Vector3(0f, 0f, 0.5f));
+                world.AddImpulseAtPoint(struck, new Vector3(0f, 0f, 1f), world.GetBody(struck).Position + Vector3.UnitX);
+                world.AddTorque(twisted, new Vector3(0f, 0f, 1f));
+                world.AddForceAtPoint(pushed, new Vector3(0f, 0f, 1f), world.GetBody(pushed).Position + Vector3.UnitX);
+                world.AddTorqueImpulse(carried, new Vector3(0f, 0f, 0.5f));
+                world.AddImpulseAtPoint(carried, new Vector3(0f, 0f, 1f), world.GetBody(carried).Position + Vector3.UnitX);
+
+                Assert.AreEqual(0.5f / inertia, world.GetBody(spun).AngularVelocity.Z, 1e-4f);
+                Assert.AreEqual(0.5f, world.GetBody(struck).Velocity.Z, 1e-5f);
+                Assert.AreEqual(-1f / inertia, world.GetBody(struck).AngularVelocity.Y, 1e-4f);
+                Assert.AreEqual(Vector3.Zero, world.GetBody(twisted).AngularVelocity);
+                Assert.AreEqual(Vector3.Zero, world.GetBody(pushed).Velocity);
+
+                world.Step(seconds);
+
+                Assert.AreEqual(seconds / inertia, world.GetBody(twisted).AngularVelocity.Z, 1e-3f);
+                Assert.AreEqual(seconds / 2f, world.GetBody(pushed).Velocity.Z, 1e-4f);
+                Assert.AreEqual(-seconds / inertia, world.GetBody(pushed).AngularVelocity.Y, 1e-3f);
+
+                world.Step(seconds);
+
+                Assert.AreEqual(seconds / inertia, world.GetBody(twisted).AngularVelocity.Z, 1e-3f);
+                Assert.AreEqual(seconds / 2f, world.GetBody(pushed).Velocity.Z, 1e-4f);
+                Assert.AreEqual(Vector3.Zero, world.GetBody(carried).Velocity);
+                Assert.AreEqual(Vector3.Zero, world.GetBody(carried).AngularVelocity);
+            }
+        }
+
+        [Test]
+        public void OnlyContinuousCollisionStopsAFastBodyAtAThinKinematicWallAndAThinStaticWallAlwaysStopsIt()
+        {
+            using (var world = new RapierWorld(Gravity))
+            {
+                world.CreateBody(new BodyDesc(BodyKind.Kinematic, new[] { Wall(Vector3.Zero) }, new Vector3(12f, 0f, 0f), Quaternion.Identity, 0f, new BodyMotion(BodyLocks.None, false, 0f, 0f)));
+                world.AddStatic(new[] { Wall(new Vector3(12f, 0f, 10f)) });
+                BodyHandle continuous = Bullet(world, -1f, true);
+                BodyHandle discrete = Bullet(world, 1f, false);
+                BodyHandle againstStatic = Bullet(world, 10f, false);
+
+                Run(world, 3);
+
+                Assert.Less(world.GetBody(continuous).Position.X, 12f);
+                Assert.Greater(world.GetBody(discrete).Position.X, 14f);
+                Assert.Less(world.GetBody(againstStatic).Position.X, 12f);
+            }
+        }
+
+        private static BodyDesc Spinner(BodyKind kind, float x) =>
+            new BodyDesc(kind, new[] { new ColliderDesc(BodyShape.Sphere(0.5f), Vector3.Zero, Quaternion.Identity, ColliderMaterial.Default, 0, false) }, new Vector3(x, 0f, 0f), Quaternion.Identity, 2f, new BodyMotion(BodyLocks.None, false, 0f, 0f));
+
+        private static ColliderDesc Wall(Vector3 position) =>
+            new ColliderDesc(BodyShape.Box(new Vector3(0.05f, 2f, 2f)), position, Quaternion.Identity, ColliderMaterial.Default, 0, false);
+
+        private static BodyHandle Bullet(RapierWorld world, float z, bool continuous)
+        {
+            var motion = new BodyMotion(BodyLocks.None, false, 0f, 0f, continuous);
+            BodyHandle bullet = world.CreateBody(new BodyDesc(BodyKind.Dynamic, new[] { new ColliderDesc(BodyShape.Sphere(0.1f), Vector3.Zero, Quaternion.Identity, ColliderMaterial.Default, 0, false) }, new Vector3(0f, 0f, z), Quaternion.Identity, 1f, motion));
+            world.AddImpulse(bullet, new Vector3(300f, 0f, 0f));
+            return bullet;
+        }
+
         private static BodyDesc Cube(Vector3 position, BodyMotion motion) =>
             new BodyDesc(BodyKind.Dynamic, new[] { new ColliderDesc(BodyShape.Box(new Vector3(0.5f)), Vector3.Zero, Quaternion.Identity, ColliderMaterial.Default, 0, false) }, position, Quaternion.Identity, 1f, motion);
 
