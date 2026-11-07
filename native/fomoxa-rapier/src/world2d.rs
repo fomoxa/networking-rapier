@@ -5,7 +5,7 @@ use rapier2d::parry::query::{self, ShapeCastOptions};
 use rapier2d::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::contact::{collider_ref, collider_tag, write_refs, FrColliderRef};
+use crate::contact::{collider_ref, collider_tag, write_items, write_refs, FrColliderRef};
 use crate::hash::StableHasher;
 use crate::query::FrQueryFilter;
 
@@ -61,6 +61,14 @@ pub struct FrQueryShape2D {
     pub half_extents: [f32; 2],
     pub radius: f32,
     pub half_height: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FrContactPoint2D {
+    pub point: [f32; 2],
+    pub normal: [f32; 2],
+    pub depth: f32,
 }
 
 #[repr(C)]
@@ -603,6 +611,63 @@ impl World2D {
         found.into_iter().collect()
     }
 
+    fn body_contact_points(&self, body: u32, other: u32, filter: &FrQueryFilter) -> Vec<FrContactPoint2D> {
+        let mut found = Vec::new();
+        if let Some(rigid_body) = self.body(body) {
+            for handle in rigid_body.colliders() {
+                self.contact_points(*handle, |_, collider| self.owner_of_collider(collider) == other && self.accepts(collider, filter), &mut found);
+            }
+        }
+
+        found
+    }
+
+    fn collider_contact_points(&self, body: u32, index: u32, other_body: u32, other_index: u32) -> Vec<FrContactPoint2D> {
+        let mut found = Vec::new();
+        if let (Some(own), Some(other)) = (self.collider_of(body, index), self.collider_of(other_body, other_index)) {
+            self.contact_points(own, |handle, _| handle == other, &mut found);
+        }
+
+        found
+    }
+
+    fn contact_points(&self, own: ColliderHandle, accepts: impl Fn(ColliderHandle, &Collider) -> bool, found: &mut Vec<FrContactPoint2D>) {
+        let reach = self.physics.integration_parameters.prediction_distance();
+        for pair in self.physics.narrow_phase.contact_pairs_with(own) {
+            if !pair.has_any_active_contact() {
+                continue;
+            }
+
+            let own_first = pair.collider1 == own;
+            let other = if own_first { pair.collider2 } else { pair.collider1 };
+            let (first, second) = match (self.physics.colliders.get(pair.collider1), self.physics.colliders.get(pair.collider2)) {
+                (Some(first), Some(second)) => (first, second),
+                _ => continue,
+            };
+            if !accepts(other, if own_first { second } else { first }) {
+                continue;
+            }
+
+            for manifold in pair.manifolds() {
+                let pose1 = manifold.subshape_pos1().map_or(*first.position(), |sub| *first.position() * *sub);
+                let pose2 = manifold.subshape_pos2().map_or(*second.position(), |sub| *second.position() * *sub);
+                let outward = pose1.rotation * manifold.local_n1;
+                let normal = if own_first { -outward } else { outward };
+                for contact in manifold.points.iter() {
+                    let on_first = pose1 * contact.local_p1;
+                    let on_second = pose2 * contact.local_p2;
+                    let depth = (on_first - on_second).dot(outward);
+                    if depth <= -reach {
+                        continue;
+                    }
+
+                    let point = (on_first + on_second) * 0.5;
+                    found.push(FrContactPoint2D { point: [point.x, point.y], normal: [normal.x, normal.y], depth });
+                }
+            }
+        }
+    }
+
     fn collider_of(&self, body: u32, index: u32) -> Option<ColliderHandle> {
         if body == 0 {
             return self.statics.get(index as usize).and_then(|slot| slot.handle);
@@ -1088,6 +1153,30 @@ pub unsafe extern "C" fn fr2_world_overlap(
 pub unsafe extern "C" fn fr2_collider_touching(world_ptr: *mut World2D, body: u32, index: u32, out: *mut FrColliderRef, capacity: u32) -> u32 {
     match world(world_ptr) {
         Some(world) => write_refs(&world.touching(body, index), out, capacity),
+        None => 0,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fr2_body_contact_points(world_ptr: *mut World2D, body: u32, other: u32, filter: &FrQueryFilter, out: *mut FrContactPoint2D, capacity: u32) -> u32 {
+    match world(world_ptr) {
+        Some(world) => write_items(&world.body_contact_points(body, other, filter), out, capacity),
+        None => 0,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fr2_collider_contact_points(
+    world_ptr: *mut World2D,
+    body: u32,
+    index: u32,
+    other_body: u32,
+    other_index: u32,
+    out: *mut FrContactPoint2D,
+    capacity: u32,
+) -> u32 {
+    match world(world_ptr) {
+        Some(world) => write_items(&world.collider_contact_points(body, index, other_body, other_index), out, capacity),
         None => 0,
     }
 }

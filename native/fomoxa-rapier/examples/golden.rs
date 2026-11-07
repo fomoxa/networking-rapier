@@ -196,6 +196,22 @@ unsafe fn ccd_3d(world: *mut World) {
     println!("3d ccd {:08x} {:08x}", position_3d(world, continuous)[0].to_bits(), position_3d(world, discrete)[0].to_bits());
 }
 
+unsafe fn contacts_3d(world: *mut World, bodies: &[u32]) {
+    let mut points = [FrContactPoint::default(); 64];
+    let mut total = 0;
+    let mut depth = 0.0f32;
+    for body in bodies {
+        let count = fr_body_contact_points(world, *body, 0, &ALL, points.as_mut_ptr(), 64) as usize;
+        for point in &points[..count.min(64)] {
+            depth += point.depth;
+        }
+
+        total += count;
+    }
+
+    println!("3d contacts {} {:08x}", total, depth.to_bits());
+}
+
 unsafe fn run_3d() {
     let world = fr_world_create(0.0, -9.81, 0.0);
     let ground_points = [-50.0, 0.0, -50.0, 50.0, 2.0, -50.0, 50.0, 0.0, 50.0, -50.0, 3.0, 50.0];
@@ -246,6 +262,7 @@ unsafe fn run_3d() {
     queries_3d(world, bodies[0]);
     forces_3d(world, &bodies);
     ccd_3d(world);
+    contacts_3d(world, &bodies);
     fr_world_destroy(world);
 }
 
@@ -292,6 +309,22 @@ unsafe fn ccd_2d(world: *mut World2D) {
     }
 
     println!("2d ccd {:08x} {:08x}", position_2d(world, continuous)[0].to_bits(), position_2d(world, discrete)[0].to_bits());
+}
+
+unsafe fn contacts_2d(world: *mut World2D, bodies: &[u32]) {
+    let mut points = [FrContactPoint2D::default(); 64];
+    let mut total = 0;
+    let mut depth = 0.0f32;
+    for body in bodies {
+        let count = fr2_body_contact_points(world, *body, 0, &ALL, points.as_mut_ptr(), 64) as usize;
+        for point in &points[..count.min(64)] {
+            depth += point.depth;
+        }
+
+        total += count;
+    }
+
+    println!("2d contacts {} {:08x}", total, depth.to_bits());
 }
 
 unsafe fn run_2d() {
@@ -342,6 +375,7 @@ unsafe fn run_2d() {
     queries_2d(world, bodies[0]);
     forces_2d(world, &bodies);
     ccd_2d(world);
+    contacts_2d(world, &bodies);
     fr2_world_destroy(world);
 }
 

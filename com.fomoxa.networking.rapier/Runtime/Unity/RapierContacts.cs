@@ -20,6 +20,8 @@ namespace Fomoxa.Unity.Rapier
         private readonly Dictionary<int, GroupColliders> groups = new Dictionary<int, GroupColliders>();
         private readonly List<int> leavingGroups = new List<int>();
         private readonly List<RapierCollider> touched = new List<RapierCollider>();
+        private readonly List<ContactPointInfo> points = new List<ContactPointInfo>();
+        private readonly List<ContactPointInfo2D> points2D = new List<ContactPointInfo2D>();
         private readonly List<NetworkTrigger> triggers = new List<NetworkTrigger>();
         private readonly List<NetworkCollision> collisions = new List<NetworkCollision>();
         private readonly List<NetworkTrigger2D> triggers2D = new List<NetworkTrigger2D>();
@@ -322,6 +324,54 @@ namespace Fomoxa.Unity.Rapier
             }
 
             touched.Clear();
+        }
+
+        public void CollectContactPoints(Collider own, Collider other, List<NetworkContactPoint> into)
+        {
+            if (!places.TryGetValue(own, out Place place) || !places.TryGetValue(other, out Place otherPlace) || place.World != otherPlace.World || !(place.World is RapierWorld world) || world.IsDisposed)
+            {
+                return;
+            }
+
+            points.Clear();
+            for (int piece = 0; piece < place.Count; piece++)
+            {
+                for (int otherPiece = 0; otherPiece < otherPlace.Count; otherPiece++)
+                {
+                    world.ContactPoints(place.At(piece), otherPlace.At(otherPiece), points);
+                }
+            }
+
+            foreach (ContactPointInfo point in points)
+            {
+                into.Add(new NetworkContactPoint(point.Point.ToUnity(), point.Normal.ToUnity(), point.Depth));
+            }
+
+            points.Clear();
+        }
+
+        public void CollectContactPoints(Collider2D own, Collider2D other, List<NetworkContactPoint2D> into)
+        {
+            if (!places2D.TryGetValue(own, out Place place) || !places2D.TryGetValue(other, out Place otherPlace) || place.World != otherPlace.World || !(place.World is RapierWorld2D world) || world.IsDisposed)
+            {
+                return;
+            }
+
+            points2D.Clear();
+            for (int piece = 0; piece < place.Count; piece++)
+            {
+                for (int otherPiece = 0; otherPiece < otherPlace.Count; otherPiece++)
+                {
+                    world.ContactPoints(place.At(piece), otherPlace.At(otherPiece), points2D);
+                }
+            }
+
+            foreach (ContactPointInfo2D point in points2D)
+            {
+                into.Add(new NetworkContactPoint2D(point.Point.ToUnity(), point.Normal.ToUnity(), point.Depth));
+            }
+
+            points2D.Clear();
         }
 
         private Collider ColliderAt(RapierWorld world, RapierCollider collider)

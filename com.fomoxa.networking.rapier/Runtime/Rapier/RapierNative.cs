@@ -138,6 +138,28 @@ namespace Fomoxa.Networking.Rapier
         }
 
         [StructLayout(LayoutKind.Sequential)]
+        internal struct ContactPoint
+        {
+            public float PointX;
+            public float PointY;
+            public float PointZ;
+            public float NormalX;
+            public float NormalY;
+            public float NormalZ;
+            public float Depth;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct ContactPoint2D
+        {
+            public float PointX;
+            public float PointY;
+            public float NormalX;
+            public float NormalY;
+            public float Depth;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
         internal struct RayHit
         {
             public uint Body;
@@ -237,6 +259,12 @@ namespace Fomoxa.Networking.Rapier
 
         [DllImport(Library)]
         internal static extern uint fr_collider_touching(IntPtr world, uint body, uint index, [Out] ColliderRef[] touching, uint capacity);
+
+        [DllImport(Library)]
+        internal static extern uint fr_body_contact_points(IntPtr world, uint body, uint other, in QueryFilter filter, [Out] ContactPoint[] points, uint capacity);
+
+        [DllImport(Library)]
+        internal static extern uint fr_collider_contact_points(IntPtr world, uint body, uint index, uint otherBody, uint otherIndex, [Out] ContactPoint[] points, uint capacity);
 
         [DllImport(Library)]
         internal static extern uint fr_world_overlap(IntPtr world, in QueryShape shape, in Vector3 position, in Quaternion rotation, in QueryFilter filter, uint[] bodies, uint capacity);
@@ -391,6 +419,12 @@ namespace Fomoxa.Networking.Rapier
 
         [DllImport(Library)]
         internal static extern uint fr2_collider_touching(IntPtr world, uint body, uint index, [Out] ColliderRef[] touching, uint capacity);
+
+        [DllImport(Library)]
+        internal static extern uint fr2_body_contact_points(IntPtr world, uint body, uint other, in QueryFilter filter, [Out] ContactPoint2D[] points, uint capacity);
+
+        [DllImport(Library)]
+        internal static extern uint fr2_collider_contact_points(IntPtr world, uint body, uint index, uint otherBody, uint otherIndex, [Out] ContactPoint2D[] points, uint capacity);
 
         [DllImport(Library)]
         internal static extern uint fr2_world_overlap(IntPtr world, in QueryShape2D shape, float x, float y, float rotation, in QueryFilter filter, uint[] bodies, uint capacity);

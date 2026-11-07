@@ -77,6 +77,7 @@ namespace Fomoxa.Rapier.PlayerCheck
                 Queries3D(world, bodies[0], lines);
                 Forces3D(world, bodies, lines);
                 Ccd3D(world, lines);
+                Contacts3D(world, bodies, lines);
             }
         }
 
@@ -128,6 +129,7 @@ namespace Fomoxa.Rapier.PlayerCheck
                 Queries2D(world, bodies[0], lines);
                 Forces2D(world, bodies, lines);
                 Ccd2D(world, lines);
+                Contacts2D(world, bodies, lines);
             }
         }
 
@@ -237,6 +239,40 @@ namespace Fomoxa.Rapier.PlayerCheck
             }
 
             lines.Add($"2d ccd {Bits(world.GetBody(continuous).Position.X)} {Bits(world.GetBody(discrete).Position.X)}");
+        }
+
+        private static void Contacts3D(RapierWorld world, BodyHandle[] bodies, List<string> lines)
+        {
+            var points = new List<ContactPointInfo>();
+            int total = 0;
+            float depth = 0f;
+            foreach (BodyHandle body in bodies)
+            {
+                total += world.GetContactPoints(body, default, QueryFilter.All, points);
+                foreach (ContactPointInfo point in points)
+                {
+                    depth += point.Depth;
+                }
+            }
+
+            lines.Add($"3d contacts {total} {Bits(depth)}");
+        }
+
+        private static void Contacts2D(RapierWorld2D world, BodyHandle[] bodies, List<string> lines)
+        {
+            var points = new List<ContactPointInfo2D>();
+            int total = 0;
+            float depth = 0f;
+            foreach (BodyHandle body in bodies)
+            {
+                total += world.GetContactPoints(body, default, QueryFilter.All, points);
+                foreach (ContactPointInfo2D point in points)
+                {
+                    depth += point.Depth;
+                }
+            }
+
+            lines.Add($"2d contacts {total} {Bits(depth)}");
         }
 
         private static BodyHandle CcdBall3D(RapierWorld world, float z, bool continuous)

@@ -645,6 +645,84 @@ namespace Fomoxa.Networking.Rapier.Tests
             }
         }
 
+        [Test]
+        public void ContactPointsPointFromTheOtherSideAndCarryTheOverlap()
+        {
+            using (var world = new RapierWorld(Gravity))
+            {
+                world.AddStatic(new[] { Ground(1) });
+                BodyHandle box = world.CreateBody(new BodyDesc(BodyKind.Dynamic, BodyShape.Box(new Vector3(0.5f)), new Vector3(0f, 0.5f, 0f), Quaternion.Identity, 1f));
+                BodyHandle ball = world.CreateBody(Ball(new Vector3(0f, 1.5f, 0f), 1f));
+                BodyHandle away = world.CreateBody(Ball(new Vector3(5f, 0.5f, 0f), 1f));
+                Run(world, 120);
+                var onGround = new List<ContactPointInfo> { default };
+                var onBox = new List<ContactPointInfo>();
+                var underBall = new List<ContactPointInfo>();
+                var pieces = new List<ContactPointInfo>();
+                var groundSide = new List<ContactPointInfo>();
+                var none = new List<ContactPointInfo> { default };
+
+                int count = world.GetContactPoints(box, default, onGround);
+                world.GetContactPoints(ball, box, onBox);
+                world.GetContactPoints(box, ball, underBall);
+                world.ContactPoints(RapierCollider.OfBody(box, 0), RapierCollider.Static(0), pieces);
+                world.ContactPoints(RapierCollider.Static(0), RapierCollider.OfBody(box, 0), groundSide);
+
+                Assert.AreEqual(onGround.Count, count);
+                Assert.GreaterOrEqual(count, 1);
+                AssertPoints(onGround, Vector3.UnitY, 0f);
+                AssertPoints(onBox, Vector3.UnitY, 1f);
+                AssertPoints(underBall, -Vector3.UnitY, 1f);
+                AssertPoints(pieces, Vector3.UnitY, 0f);
+                AssertPoints(groundSide, -Vector3.UnitY, 0f);
+                Assert.AreEqual(count, pieces.Count);
+                Assert.Greater(world.GetContactPoints(box, default, new QueryFilter(1 << 1, default, false), none), 0);
+                Assert.AreEqual(0, world.GetContactPoints(box, default, new QueryFilter(1 << 0, default, true), none));
+                Assert.AreEqual(0, world.GetContactPoints(box, ball, new QueryFilter(-1, ball, true), none));
+                Assert.AreEqual(0, world.GetContactPoints(ball, away, none));
+                Assert.AreEqual(0, world.GetContactPoints(default, default, none));
+                CollectionAssert.IsEmpty(none);
+            }
+        }
+
+        [Test]
+        public void LoadBringsBackTheContactPointsOfTheSavedTick()
+        {
+            using (var world = new RapierWorld(Gravity))
+            {
+                world.AddStatic(new[] { Ground(0) });
+                BodyHandle box = world.CreateBody(new BodyDesc(BodyKind.Dynamic, BodyShape.Box(new Vector3(0.5f)), new Vector3(0f, 0.5f, 0f), Quaternion.Identity, 1f));
+                Run(world, 60);
+                PhysicsSnapshot saved = world.CreateSnapshot();
+                world.Save(saved);
+                var before = new List<ContactPointInfo>();
+                world.GetContactPoints(box, default, before);
+                world.SetBody(box, new BodyState { Position = new Vector3(0f, 20f, 0f), Rotation = Quaternion.Identity });
+                Run(world, 2);
+                var lifted = new List<ContactPointInfo>();
+                world.GetContactPoints(box, default, lifted);
+
+                world.Load(saved);
+                var after = new List<ContactPointInfo>();
+                world.GetContactPoints(box, default, after);
+
+                CollectionAssert.IsNotEmpty(before);
+                CollectionAssert.IsEmpty(lifted);
+                CollectionAssert.AreEqual(before, after);
+            }
+        }
+
+        private static void AssertPoints(List<ContactPointInfo> points, Vector3 normal, float height)
+        {
+            CollectionAssert.IsNotEmpty(points);
+            foreach (ContactPointInfo point in points)
+            {
+                Assert.Greater(Vector3.Dot(point.Normal, normal), 0.999f);
+                Assert.AreEqual(height, point.Point.Y, 0.02f);
+                Assert.AreEqual(0f, point.Depth, 0.02f);
+            }
+        }
+
         private static BodyDesc Spinner(BodyKind kind, float x) =>
             new BodyDesc(kind, new[] { new ColliderDesc(BodyShape.Sphere(0.5f), Vector3.Zero, Quaternion.Identity, ColliderMaterial.Default, 0, false) }, new Vector3(x, 0f, 0f), Quaternion.Identity, 2f, new BodyMotion(BodyLocks.None, false, 0f, 0f));
 

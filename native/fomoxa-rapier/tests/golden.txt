@@ -14,6 +14,7 @@
 3d inside true 1 00000000
 3d forces 9315263bb5c7e4dc
 3d ccd 434be948 43660000
+3d contacts 184 bdf7099a
 2d 150 c97da396a3cb0eea
 2d 300 e2c22756c345bdb9
 2d 450 a1e601e5c3be3030
@@ -30,3 +31,4 @@
 2d inside true 1 00000000
 2d forces 38996e21096ba246
 2d ccd 434be948 43660000
+2d contacts 45 bc9653f4

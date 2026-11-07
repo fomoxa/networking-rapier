@@ -338,6 +338,65 @@ namespace Fomoxa.Unity.Rapier.Tests
         }
 
         [Test]
+        public void ACollisionOnABallGivesTheContactPointsOfTheGround()
+        {
+            GameObject ground = Static("Ground", new Vector3(0f, -0.5f, 0f), new Vector3(20f, 1f, 20f), false);
+            NetworkObject ballPrefab = Prefab("Ball", BallPrefabId, ball =>
+            {
+                ball.AddComponent<SphereCollider>().radius = 0.5f;
+                ball.AddComponent<Rigidbody>();
+                ball.AddComponent<NetworkCollision>();
+            });
+            NetworkManager server = Manager(ballPrefab);
+            UseActiveScene(server);
+            server.ServerManager.StartConnection(1);
+            NetworkObject ball = Spawn(server, ballPrefab, new Vector3(0f, 3f, 0f));
+            var collision = Enable(ball.GetComponent<NetworkCollision>());
+
+            RunFrames(120);
+
+            var points = new List<NetworkContactPoint> { default, default };
+            Assert.Greater(collision.GetContactPoints(ground.GetComponent<Collider>(), points), 0);
+            foreach (NetworkContactPoint point in points)
+            {
+                Assert.AreEqual(0f, Vector3.Distance(Vector3.up, point.Normal), 1e-3f);
+                Assert.AreEqual(0f, point.Point.y, 0.02f);
+                Assert.AreEqual(0f, point.Depth, 0.02f);
+            }
+
+            Assert.AreEqual(0, collision.GetContactPoints(null, points));
+            Assert.AreEqual(0, points.Count);
+        }
+
+        [Test]
+        public void ACollision2DOnABallGivesTheContactPointsOfTheGround()
+        {
+            NetworkObject ballPrefab = Prefab("Ball2D", BallPrefabId, ball =>
+            {
+                ball.AddComponent<CircleCollider2D>().radius = 0.5f;
+                ball.AddComponent<Rigidbody2D>();
+                ball.AddComponent<NetworkCollision2D>();
+            });
+            NetworkObject groundPrefab = Prefab("Ground2D", GroundPrefabId, ground => ground.AddComponent<BoxCollider2D>().size = new Vector2(20f, 1f));
+            NetworkManager server = Manager(ballPrefab, groundPrefab);
+            server.ServerManager.StartConnection(1);
+            NetworkObject ground = Spawn(server, groundPrefab, new Vector3(0f, -0.5f, 0f));
+            NetworkObject ball = Spawn(server, ballPrefab, new Vector3(0f, 4f, 0f));
+            var collision = Enable(ball.GetComponent<NetworkCollision2D>());
+
+            RunFrames(180);
+
+            var points = new List<NetworkContactPoint2D> { default, default };
+            Assert.Greater(collision.GetContactPoints(ground.GetComponent<Collider2D>(), points), 0);
+            foreach (NetworkContactPoint2D point in points)
+            {
+                Assert.AreEqual(0f, Vector2.Distance(Vector2.up, point.Normal), 1e-3f);
+                Assert.AreEqual(0f, point.Point.y, 0.02f);
+                Assert.AreEqual(0f, point.Depth, 0.02f);
+            }
+        }
+
+        [Test]
         public void AStaticTriggerSeesABallPassThroughUntilThePhysicsIsReleased()
         {
             GameObject zone = Static("Zone", Vector3.zero, new Vector3(4f, 1f, 4f), true);

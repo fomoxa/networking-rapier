@@ -16,6 +16,10 @@ pub fn collider_ref(tag: u128) -> FrColliderRef {
 }
 
 pub unsafe fn write_refs(found: &[FrColliderRef], out: *mut FrColliderRef, capacity: u32) -> u32 {
+    write_items(found, out, capacity)
+}
+
+pub unsafe fn write_items<T: Copy>(found: &[T], out: *mut T, capacity: u32) -> u32 {
     let count = found.len().min(capacity as usize);
     if count > 0 && !out.is_null() {
         slice::from_raw_parts_mut(out, count).copy_from_slice(&found[..count]);

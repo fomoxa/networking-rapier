@@ -13,6 +13,7 @@ namespace Fomoxa.Networking.Rapier
         private uint[] overlapped = new uint[64];
         private uint[] moved = new uint[64];
         private RapierNative.ColliderRef[] touched = new RapierNative.ColliderRef[16];
+        private RapierNative.ContactPoint[] contactPoints = new RapierNative.ContactPoint[16];
 
         public RapierWorld(Vector3 gravity)
         {
@@ -323,6 +324,43 @@ namespace Fomoxa.Networking.Rapier
             }
         }
 
+        public int GetContactPoints(BodyHandle body, BodyHandle other, in QueryFilter filter, List<ContactPointInfo> into)
+        {
+            if (into == null)
+            {
+                throw new ArgumentNullException(nameof(into));
+            }
+
+            into.Clear();
+            RapierNative.QueryFilter native = RapierNative.QueryFilter.Of(filter);
+            uint count = RapierNative.fr_body_contact_points(world, Id(body), Id(other), native, contactPoints, (uint)contactPoints.Length);
+            if (count > contactPoints.Length)
+            {
+                contactPoints = new RapierNative.ContactPoint[count];
+                count = RapierNative.fr_body_contact_points(world, Id(body), Id(other), native, contactPoints, (uint)contactPoints.Length);
+            }
+
+            AddContactPoints(count, into);
+            return into.Count;
+        }
+
+        public void ContactPoints(RapierCollider collider, RapierCollider other, List<ContactPointInfo> into)
+        {
+            if (into == null)
+            {
+                throw new ArgumentNullException(nameof(into));
+            }
+
+            uint count = RapierNative.fr_collider_contact_points(world, Id(collider.Body), (uint)collider.Index, Id(other.Body), (uint)other.Index, contactPoints, (uint)contactPoints.Length);
+            if (count > contactPoints.Length)
+            {
+                contactPoints = new RapierNative.ContactPoint[count];
+                count = RapierNative.fr_collider_contact_points(world, Id(collider.Body), (uint)collider.Index, Id(other.Body), (uint)other.Index, contactPoints, (uint)contactPoints.Length);
+            }
+
+            AddContactPoints(count, into);
+        }
+
         public void Dispose()
         {
             if (world != IntPtr.Zero)
@@ -341,6 +379,15 @@ namespace Fomoxa.Networking.Rapier
         private static ArgumentException Missing(BodyHandle body) => new ArgumentException($"body {body.Value} is not in this world", nameof(body));
 
         private static uint Id(BodyHandle body) => body.IsValid ? (uint)body.Value : 0u;
+
+        private void AddContactPoints(uint count, List<ContactPointInfo> into)
+        {
+            for (int index = 0; index < count; index++)
+            {
+                RapierNative.ContactPoint point = contactPoints[index];
+                into.Add(new ContactPointInfo(new Vector3(point.PointX, point.PointY, point.PointZ), new Vector3(point.NormalX, point.NormalY, point.NormalZ), point.Depth));
+            }
+        }
 
         private void Require(BodyHandle body)
         {

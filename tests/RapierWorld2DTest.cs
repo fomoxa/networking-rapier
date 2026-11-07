@@ -516,6 +516,84 @@ namespace Fomoxa.Networking.Rapier.Tests
             }
         }
 
+        [Test]
+        public void ContactPointsPointFromTheOtherSideAndCarryTheOverlap()
+        {
+            using (var world = new RapierWorld2D(Gravity))
+            {
+                world.AddStatic(new[] { new ColliderDesc2D(BodyShape2D.Box(new Vector2(10f, 0.5f)), new Vector2(0f, -0.5f), 0f, ColliderMaterial.Default, 1, false) });
+                BodyHandle box = world.CreateBody(Box(new Vector2(0f, 0.5f), BodyMotion2D.Default));
+                BodyHandle ball = world.CreateBody(Circle(new Vector2(0f, 1.5f), 1f));
+                BodyHandle away = world.CreateBody(Circle(new Vector2(5f, 0.5f), 1f));
+                Run(world, 120);
+                var onGround = new List<ContactPointInfo2D> { default };
+                var onBox = new List<ContactPointInfo2D>();
+                var underBall = new List<ContactPointInfo2D>();
+                var pieces = new List<ContactPointInfo2D>();
+                var groundSide = new List<ContactPointInfo2D>();
+                var none = new List<ContactPointInfo2D> { default };
+
+                int count = world.GetContactPoints(box, default, onGround);
+                world.GetContactPoints(ball, box, onBox);
+                world.GetContactPoints(box, ball, underBall);
+                world.ContactPoints(RapierCollider.OfBody(box, 0), RapierCollider.Static(0), pieces);
+                world.ContactPoints(RapierCollider.Static(0), RapierCollider.OfBody(box, 0), groundSide);
+
+                Assert.AreEqual(onGround.Count, count);
+                Assert.GreaterOrEqual(count, 1);
+                AssertPoints(onGround, Vector2.UnitY, 0f);
+                AssertPoints(onBox, Vector2.UnitY, 1f);
+                AssertPoints(underBall, -Vector2.UnitY, 1f);
+                AssertPoints(pieces, Vector2.UnitY, 0f);
+                AssertPoints(groundSide, -Vector2.UnitY, 0f);
+                Assert.AreEqual(count, pieces.Count);
+                Assert.Greater(world.GetContactPoints(box, default, new QueryFilter(1 << 1, default, false), none), 0);
+                Assert.AreEqual(0, world.GetContactPoints(box, default, new QueryFilter(1 << 0, default, true), none));
+                Assert.AreEqual(0, world.GetContactPoints(box, ball, new QueryFilter(-1, ball, true), none));
+                Assert.AreEqual(0, world.GetContactPoints(ball, away, none));
+                Assert.AreEqual(0, world.GetContactPoints(default, default, none));
+                CollectionAssert.IsEmpty(none);
+            }
+        }
+
+        [Test]
+        public void LoadBringsBackTheContactPointsOfTheSavedTick()
+        {
+            using (var world = new RapierWorld2D(Gravity))
+            {
+                world.AddStatic(new[] { Ground() });
+                BodyHandle box = world.CreateBody(Box(new Vector2(0f, 0.5f), BodyMotion2D.Default));
+                Run(world, 60);
+                PhysicsSnapshot saved = world.CreateSnapshot();
+                world.Save(saved);
+                var before = new List<ContactPointInfo2D>();
+                world.GetContactPoints(box, default, before);
+                world.SetBody(box, new BodyState2D { Position = new Vector2(0f, 20f) });
+                Run(world, 2);
+                var lifted = new List<ContactPointInfo2D>();
+                world.GetContactPoints(box, default, lifted);
+
+                world.Load(saved);
+                var after = new List<ContactPointInfo2D>();
+                world.GetContactPoints(box, default, after);
+
+                CollectionAssert.IsNotEmpty(before);
+                CollectionAssert.IsEmpty(lifted);
+                CollectionAssert.AreEqual(before, after);
+            }
+        }
+
+        private static void AssertPoints(List<ContactPointInfo2D> points, Vector2 normal, float height)
+        {
+            CollectionAssert.IsNotEmpty(points);
+            foreach (ContactPointInfo2D point in points)
+            {
+                Assert.Greater(Vector2.Dot(point.Normal, normal), 0.999f);
+                Assert.AreEqual(height, point.Point.Y, 0.02f);
+                Assert.AreEqual(0f, point.Depth, 0.02f);
+            }
+        }
+
         private static BodyDesc2D Disc(BodyKind kind, float x) =>
             new BodyDesc2D(kind, new[] { new ColliderDesc2D(BodyShape2D.Circle(0.5f), Vector2.Zero, 0f, ColliderMaterial.Default, 0, false) }, new Vector2(x, 0f), 0f, 2f, new BodyMotion2D(BodyLocks2D.None, 0f, 0f, 0f));
 
