@@ -6,7 +6,7 @@ on:
 
 env:
   CORE_REPOSITORY: fomoxa/com.fomoxa.networking
-  CORE_COMMIT: 13d8a6e8a751954da2932a5d86605dbeea7c2734
+  CORE_COMMIT: 0cd6d525d8e41dc219d1b1837b6308ca99dfdfcf
 
 jobs:
   test:
@@ -37,3 +37,6 @@ jobs:
 
       - name: dotnet tests
         run: dotnet test tests/Fomoxa.Networking.Rapier.Tests.csproj -c Release -p:Unity=${{ github.workspace }}/core
+
+      - name: build the benchmark
+        run: dotnet build bench/Fomoxa.Rapier.Bench.csproj -c Release -p:Unity=${{ github.workspace }}/core

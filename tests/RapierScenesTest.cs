@@ -158,7 +158,7 @@ namespace Fomoxa.Networking.Rapier.Tests
                 RapierWorld world = scenes.WorldOf(ArenaSceneId);
                 PhysicsHistory history = scenes.HistoryOf(world, 4);
 
-                scenes.PlaceProxy(entity);
+                scenes.PlaceProxy(entity, body);
                 PhysicsSnapshot snapshot = world.CreateSnapshot();
                 world.Save(snapshot);
                 body.Position = new Vector3(4f, 0f, 0f);
@@ -170,6 +170,27 @@ namespace Fomoxa.Networking.Rapier.Tests
                 Assert.AreEqual(4f, body.Position.X, 1e-5f);
                 Assert.IsFalse(body.IsKinematic);
                 Assert.AreSame(history, scenes.HistoryOf(world, 4));
+            }
+        }
+
+        [Test]
+        public void OnlyTheNamedBodyOfAnEntityBecomesAProxy()
+        {
+            using (var scenes = new RapierScenes())
+            {
+                StandaloneEntity entity = Entity();
+                PhysicsBody root = scenes.AddBody(entity, ArenaSceneId, Ball(Vector3.Zero));
+                PhysicsBody limb = scenes.AddBody(entity, ArenaSceneId, Ball(new Vector3(3f, 0f, 0f)));
+                PhysicsBody2D tail = scenes.AddBody2D(entity, ArenaSceneId, new BodyDesc2D(BodyKind.Dynamic, BodyShape2D.Circle(0.5f), Vector2.Zero, 0f, 1f));
+                PhysicsBody other = scenes.AddBody(Entity(), ArenaSceneId, Ball(new Vector3(6f, 0f, 0f)));
+
+                scenes.PlaceProxy(entity, limb);
+                scenes.PlaceProxy(entity, other);
+                bool[] proxied = { root.IsKinematic, limb.IsKinematic, tail.IsKinematic, other.IsKinematic };
+                scenes.EndProxy(entity);
+
+                CollectionAssert.AreEqual(new[] { false, true, false, false }, proxied);
+                Assert.IsFalse(limb.IsKinematic);
             }
         }
 

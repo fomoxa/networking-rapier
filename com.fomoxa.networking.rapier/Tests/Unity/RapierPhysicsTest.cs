@@ -21,6 +21,7 @@ namespace Fomoxa.Unity.Rapier.Tests
         private const uint BallPrefabId = 0xBA11;
         private const uint GroundPrefabId = 0x6400;
         private const uint ScaledBallPrefabId = 0xBA12;
+        private const uint RagdollPrefabId = 0xBA13;
         private const uint ArenaSceneId = 0x77;
 
         private readonly List<GameObject> created = new List<GameObject>();
@@ -289,6 +290,69 @@ namespace Fomoxa.Unity.Rapier.Tests
         }
 
         [Test]
+        public void AChildRigidbodyIsABodyOfItsOwnThatRapierMovesWhileItsNetworkTransformIsFollowed()
+        {
+            NetworkObject ragdollPrefab = Prefab("Ragdoll", RagdollPrefabId, ragdoll =>
+            {
+                ragdoll.AddComponent<SphereCollider>().radius = 0.5f;
+                ragdoll.AddComponent<Rigidbody>();
+                ragdoll.AddComponent<NetworkTransform>();
+                Limb(ragdoll.transform, "Limb", new Vector3(1.5f, 2f, 0f)).AddComponent<NetworkTransform>();
+            });
+            NetworkObject groundPrefab = Prefab("Ground", GroundPrefabId, ground => ground.AddComponent<BoxCollider>().size = new Vector3(20f, 1f, 20f));
+            NetworkManager server = Manager(ragdollPrefab, groundPrefab);
+            NetworkManager client = Manager(ragdollPrefab, groundPrefab);
+            server.ServerManager.StartConnection(1);
+            client.ClientManager.StartConnection("unused.invalid", 1);
+            RunFrames(30);
+            Spawn(server, groundPrefab, new Vector3(0f, -0.5f, 0f));
+            NetworkObject ragdoll = Spawn(server, ragdollPrefab, new Vector3(0f, 3f, 0f));
+            Transform limb = ragdoll.transform.Find("Limb");
+            RunFrames(20);
+            bool fallingReadEveryTick = ReadEveryTick(ragdoll);
+
+            RunFrames(600);
+
+            var onClient = (NetworkObject)client.ClientManager.Spawned[ragdoll.ObjectId];
+            Assert.IsFalse(fallingReadEveryTick);
+            Assert.IsFalse(ReadEveryTick(ragdoll));
+            Assert.AreEqual(2, ragdoll.Bodies.Count);
+            Assert.AreEqual(ragdoll.Body.Handle, ragdoll.Bodies[0].Handle);
+            Assert.IsTrue(limb.GetComponent<Rigidbody>().isKinematic);
+            Assert.AreEqual(0.5f, ragdoll.transform.position.y, 0.05f);
+            Assert.AreEqual(0.25f, limb.position.y, 0.05f);
+            Assert.AreEqual(limb.position.y, ragdoll.Bodies[1].Position.Y, 1e-5f);
+            Assert.Less(Vector3.Distance(limb.localPosition, onClient.transform.Find("Limb").localPosition), 1e-3f);
+        }
+
+        [Test]
+        public void AClientProxiesTheRootAndTheChildBodiesWithANetworkTransformOnly()
+        {
+            NetworkObject ragdollPrefab = Prefab("Ragdoll", RagdollPrefabId, ragdoll =>
+            {
+                ragdoll.AddComponent<SphereCollider>().radius = 0.5f;
+                ragdoll.AddComponent<Rigidbody>();
+                Limb(ragdoll.transform, "Synced", new Vector3(2f, 0f, 0f)).AddComponent<NetworkTransform>();
+                Limb(ragdoll.transform, "Free", new Vector3(-2f, 0f, 0f));
+            });
+            NetworkManager server = Manager(ragdollPrefab);
+            NetworkManager client = Manager(ragdollPrefab);
+            server.ServerManager.StartConnection(1);
+            client.ClientManager.StartConnection("unused.invalid", 1);
+            RunFrames(30);
+            NetworkObject ragdoll = Spawn(server, ragdollPrefab, new Vector3(0f, 4f, 0f));
+            RunFrames(30);
+
+            var onClient = (NetworkObject)client.ClientManager.Spawned[ragdoll.ObjectId];
+            IReadOnlyList<PhysicsBody> bodies = onClient.Bodies;
+            Assert.AreEqual(3, bodies.Count);
+            Assert.IsTrue(bodies[0].IsKinematic);
+            Assert.IsTrue(bodies[1].IsKinematic);
+            Assert.IsFalse(bodies[2].IsKinematic);
+            Assert.Less(onClient.transform.Find("Free").position.y, 3.5f);
+        }
+
+        [Test]
         public void AClientKeepsTheObjectsItDoesNotPredictAsKinematicProxies()
         {
             NetworkObject ballPrefab = Prefab("Ball", BallPrefabId, ball => { ball.AddComponent<SphereCollider>().radius = 0.5f; ball.AddComponent<Rigidbody>(); });
@@ -549,6 +613,16 @@ namespace Fomoxa.Unity.Rapier.Tests
             var physics = manager.GetComponent<RapierPhysics>();
             physics.SceneIdOf = scene => scene == active ? ArenaSceneId : 0;
             physics.SceneFileOf = sceneId => sceneId == ArenaSceneId ? bytes : null;
+        }
+
+        private static GameObject Limb(Transform parent, string name, Vector3 localPosition)
+        {
+            var limb = new GameObject(name);
+            limb.transform.SetParent(parent, false);
+            limb.transform.localPosition = localPosition;
+            limb.AddComponent<SphereCollider>().radius = 0.25f;
+            limb.AddComponent<Rigidbody>();
+            return limb;
         }
 
         private static bool ReadEveryTick(NetworkObject networkObject) =>

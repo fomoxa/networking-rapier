@@ -47,19 +47,20 @@ namespace Fomoxa.Unity.Rapier
             return trackers2D.TryGetValue(world, out ContactTracker<Collider2D> tracker2D) ? tracker2D : null;
         }
 
-        public void AddBody(NetworkObject networkObject, RapierWorld world, List<Collider> sources, RapierWorld2D world2D, List<Collider2D> sources2D)
+        public void AddBody(NetworkObject networkObject, RapierWorld world, BodyHandle body, List<Collider> sources)
         {
-            var entry = new BodyColliders { World = world, World2D = world2D, Sources = sources, Sources2D = sources2D };
-            bodies[networkObject] = entry;
-            if (world != null && scenes.TryGetBody(networkObject, world, out BodyHandle body))
-            {
-                Locate(sources, world, body, places);
-            }
+            BodyColliders entry = EntryOf(networkObject);
+            entry.World = world;
+            entry.Sources[body.Value] = sources;
+            Locate(sources, world, body, places);
+        }
 
-            if (world2D != null && scenes.TryGetBody(networkObject, world2D, out BodyHandle body2D))
-            {
-                Locate(sources2D, world2D, body2D, places2D);
-            }
+        public void AddBody2D(NetworkObject networkObject, RapierWorld2D world, BodyHandle body, List<Collider2D> sources)
+        {
+            BodyColliders entry = EntryOf(networkObject);
+            entry.World2D = world;
+            entry.Sources2D[body.Value] = sources;
+            Locate(sources, world, body, places2D);
         }
 
         public void RemoveBody(NetworkObject networkObject)
@@ -70,8 +71,15 @@ namespace Fomoxa.Unity.Rapier
             }
 
             Release(entry.Claimed);
-            Forget(entry.Sources, entry.World, places);
-            Forget(entry.Sources2D, entry.World2D, places2D);
+            foreach (List<Collider> sources in entry.Sources.Values)
+            {
+                Forget(sources, entry.World, places);
+            }
+
+            foreach (List<Collider2D> sources in entry.Sources2D.Values)
+            {
+                Forget(sources, entry.World2D, places2D);
+            }
         }
 
         public void Claim(NetworkObject networkObject)
@@ -374,6 +382,17 @@ namespace Fomoxa.Unity.Rapier
             points2D.Clear();
         }
 
+        private BodyColliders EntryOf(NetworkObject networkObject)
+        {
+            if (!bodies.TryGetValue(networkObject, out BodyColliders entry))
+            {
+                entry = new BodyColliders();
+                bodies.Add(networkObject, entry);
+            }
+
+            return entry;
+        }
+
         private Collider ColliderAt(RapierWorld world, RapierCollider collider)
         {
             if (collider.IsStatic)
@@ -381,8 +400,9 @@ namespace Fomoxa.Unity.Rapier
                 return statics.TryGetValue(world, out List<Collider> sources) && collider.Index < sources.Count ? sources[collider.Index] : null;
             }
 
-            return scenes.EntityOf(world, collider.Body) is NetworkObject networkObject && bodies.TryGetValue(networkObject, out BodyColliders entry) && ReferenceEquals(entry.World, world) && collider.Index < entry.Sources.Count
-                ? entry.Sources[collider.Index]
+            return scenes.EntityOf(world, collider.Body) is NetworkObject networkObject && bodies.TryGetValue(networkObject, out BodyColliders entry) && ReferenceEquals(entry.World, world)
+                && entry.Sources.TryGetValue(collider.Body.Value, out List<Collider> bodySources) && collider.Index < bodySources.Count
+                ? bodySources[collider.Index]
                 : null;
         }
 
@@ -393,8 +413,9 @@ namespace Fomoxa.Unity.Rapier
                 return statics2D.TryGetValue(world, out List<Collider2D> sources) && collider.Index < sources.Count ? sources[collider.Index] : null;
             }
 
-            return scenes.EntityOf(world, collider.Body) is NetworkObject networkObject && bodies.TryGetValue(networkObject, out BodyColliders entry) && ReferenceEquals(entry.World2D, world) && collider.Index < entry.Sources2D.Count
-                ? entry.Sources2D[collider.Index]
+            return scenes.EntityOf(world, collider.Body) is NetworkObject networkObject && bodies.TryGetValue(networkObject, out BodyColliders entry) && ReferenceEquals(entry.World2D, world)
+                && entry.Sources2D.TryGetValue(collider.Body.Value, out List<Collider2D> bodySources) && collider.Index < bodySources.Count
+                ? bodySources[collider.Index]
                 : null;
         }
 
@@ -572,10 +593,10 @@ namespace Fomoxa.Unity.Rapier
 
         private sealed class BodyColliders
         {
+            public readonly Dictionary<int, List<Collider>> Sources = new Dictionary<int, List<Collider>>();
+            public readonly Dictionary<int, List<Collider2D>> Sources2D = new Dictionary<int, List<Collider2D>>();
             public RapierWorld World;
             public RapierWorld2D World2D;
-            public List<Collider> Sources;
-            public List<Collider2D> Sources2D;
             public readonly List<MonoBehaviour> Claimed = new List<MonoBehaviour>();
         }
 

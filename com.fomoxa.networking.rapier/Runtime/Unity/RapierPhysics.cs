@@ -25,6 +25,8 @@ namespace Fomoxa.Unity.Rapier
         private readonly HashSet<NetworkObject> spawned = new HashSet<NetworkObject>();
         private readonly List<NetworkObject> binding = new List<NetworkObject>();
         private readonly List<IPhysicsSimulation> inner = new List<IPhysicsSimulation>();
+        private readonly List<Rigidbody> treeBodies = new List<Rigidbody>();
+        private readonly List<Rigidbody2D> treeBodies2D = new List<Rigidbody2D>();
         private NetworkManager manager;
         private RapierScenes scenes;
         private RapierContacts contacts;
@@ -122,6 +124,10 @@ namespace Fomoxa.Unity.Rapier
             return found?.Body2D ?? default;
         }
 
+        public override IReadOnlyList<PhysicsBody> BodiesOf(NetworkObject networkObject) => Bind(networkObject)?.Bodies ?? (IReadOnlyList<PhysicsBody>)Array.Empty<PhysicsBody>();
+
+        public override IReadOnlyList<PhysicsBody2D> Bodies2DOf(NetworkObject networkObject) => Bind(networkObject)?.Bodies2D ?? (IReadOnlyList<PhysicsBody2D>)Array.Empty<PhysicsBody2D>();
+
         public override PhysicsHistory HistoryOf(IPhysicsSimulation world, int capacity) => scenes.HistoryOf(world, capacity);
 
         public bool ReportsMotion(INetworkEntity entity) => scenes != null && scenes.ReportsMotion(entity);
@@ -131,32 +137,20 @@ namespace Fomoxa.Unity.Rapier
             scenes?.CollectMoved(into);
             foreach (KeyValuePair<NetworkObject, Bound> entry in bound)
             {
-                Bound found = entry.Value;
-                if (found.IsProxy || entry.Key == null || !found.HasBody)
+                if (entry.Key == null)
                 {
                     continue;
                 }
 
-                Transform target = found.Transform;
-                Transform parent = target.parent;
-                bool shifted = found.Seen && !ReferenceEquals(parent, found.SeenParent);
-                if (found.Body2D.IsValid)
+                bool shifted = false;
+                foreach (BoundPart part in entry.Value.Parts)
                 {
-                    float z = target.position.z;
-                    shifted |= found.Seen && !z.Equals(found.SeenZ);
-                    found.SeenZ = z;
+                    if (!part.IsProxy && part.Transform != null)
+                    {
+                        shifted |= part.Shifted();
+                    }
                 }
 
-                if (parent != null)
-                {
-                    target.GetLocalPositionAndRotation(out Vector3 localPosition, out Quaternion localRotation);
-                    shifted |= found.Seen && (!localPosition.Equals(found.SeenLocalPosition) || !localRotation.Equals(found.SeenLocalRotation));
-                    found.SeenLocalPosition = localPosition;
-                    found.SeenLocalRotation = localRotation;
-                }
-
-                found.SeenParent = parent;
-                found.Seen = true;
                 if (shifted)
                 {
                     into.Add(entry.Key);
@@ -172,29 +166,49 @@ namespace Fomoxa.Unity.Rapier
                 return;
             }
 
-            scenes.PlaceProxy(networkObject);
-            found.IsProxy = true;
-            Transform placed = networkObject.transform;
-            if (found.Body.IsValid)
+            foreach (BoundPart part in found.Parts)
             {
-                PhysicsBody body = found.Body;
-                body.State = new BodyState { Position = placed.position.ToNumerics(), Rotation = placed.rotation.ToNumerics() };
-            }
+                if (part.Transform == null || (!part.IsRoot && !part.Transform.TryGetComponent(out NetworkTransform _)))
+                {
+                    continue;
+                }
 
-            if (found.Body2D.IsValid)
-            {
-                PhysicsBody2D body = found.Body2D;
-                Vector3 position = placed.position;
-                body.State = new BodyState2D { Position = new System.Numerics.Vector2(position.x, position.y), Rotation = placed.eulerAngles.z * Mathf.Deg2Rad };
+                Transform placed = part.Transform;
+                if (part.Body.IsValid)
+                {
+                    scenes.PlaceProxy(networkObject, part.Body);
+                    PhysicsBody body = part.Body;
+                    body.State = new BodyState { Position = placed.position.ToNumerics(), Rotation = placed.rotation.ToNumerics() };
+                }
+                else if (part.Body2D.IsValid)
+                {
+                    scenes.PlaceProxy(networkObject, part.Body2D);
+                    PhysicsBody2D body = part.Body2D;
+                    Vector3 position = placed.position;
+                    body.State = new BodyState2D { Position = new System.Numerics.Vector2(position.x, position.y), Rotation = placed.eulerAngles.z * Mathf.Deg2Rad };
+                }
+
+                part.IsProxy = true;
             }
         }
 
         public override void EndProxy(NetworkObject networkObject)
         {
-            if (networkObject != null && bound.TryGetValue(networkObject, out Bound found) && found.IsProxy)
+            if (networkObject == null || !bound.TryGetValue(networkObject, out Bound found))
+            {
+                return;
+            }
+
+            bool proxied = false;
+            foreach (BoundPart part in found.Parts)
+            {
+                proxied |= part.IsProxy;
+                part.IsProxy = false;
+            }
+
+            if (proxied)
             {
                 scenes.EndProxy(networkObject);
-                found.IsProxy = false;
             }
         }
 
@@ -321,21 +335,28 @@ namespace Fomoxa.Unity.Rapier
         {
             foreach (KeyValuePair<NetworkObject, Bound> entry in bound)
             {
-                Bound found = entry.Value;
-                if (found.IsProxy || entry.Key == null)
+                if (entry.Key == null)
                 {
                     continue;
                 }
 
-                Transform target = entry.Key.transform;
-                if (found.Body.IsValid && ReferenceEquals(found.World, world))
+                foreach (BoundPart part in entry.Value.Parts)
                 {
-                    target.SetPositionAndRotation(found.Body.Position.ToUnity(), found.Body.Rotation.ToUnity());
-                }
-                else if (found.Body2D.IsValid && ReferenceEquals(found.World2D, world))
-                {
-                    System.Numerics.Vector2 position = found.Body2D.Position;
-                    target.SetPositionAndRotation(new Vector3(position.X, position.Y, target.position.z), Quaternion.AngleAxis(found.Body2D.Rotation * Mathf.Rad2Deg, Vector3.forward));
+                    Transform target = part.Transform;
+                    if (part.IsProxy || target == null)
+                    {
+                        continue;
+                    }
+
+                    if (part.Body.IsValid && ReferenceEquals(entry.Value.World, world))
+                    {
+                        target.SetPositionAndRotation(part.Body.Position.ToUnity(), part.Body.Rotation.ToUnity());
+                    }
+                    else if (part.Body2D.IsValid && ReferenceEquals(entry.Value.World2D, world))
+                    {
+                        System.Numerics.Vector2 position = part.Body2D.Position;
+                        target.SetPositionAndRotation(new Vector3(position.X, position.Y, target.position.z), Quaternion.AngleAxis(part.Body2D.Rotation * Mathf.Rad2Deg, Vector3.forward));
+                    }
                 }
             }
         }
@@ -487,34 +508,29 @@ namespace Fomoxa.Unity.Rapier
                 return found;
             }
 
-            found = new Bound { Transform = networkObject.transform };
+            found = new Bound();
             bound.Add(networkObject, found);
-            var sources = new List<Collider>();
-            var sources2D = new List<Collider2D>();
             uint sceneId = IdOf(networkObject.gameObject.scene);
+            GameObject root = networkObject.gameObject;
             try
             {
-                if (BodyDescriptions.TryDescribe(networkObject.gameObject, out BodyDesc body, sources))
+                AddPart(networkObject, found, sceneId, root);
+                networkObject.GetComponentsInChildren(true, treeBodies);
+                foreach (Rigidbody rigidbody in treeBodies)
                 {
-                    found.Body = scenes.AddBody(networkObject, sceneId, body);
-                    found.World = scenes.WorldOf(sceneId);
-                    if (networkObject.TryGetComponent(out Rigidbody rigidbody))
+                    if (rigidbody.gameObject != root && ActiveInTree(rigidbody.transform, root.transform))
                     {
-                        found.Rigidbody = rigidbody;
-                        found.WasKinematic = rigidbody.isKinematic;
-                        rigidbody.isKinematic = true;
+                        AddPart(networkObject, found, sceneId, rigidbody.gameObject);
                     }
                 }
 
-                if (BodyDescriptions.TryDescribe2D(networkObject.gameObject, out BodyDesc2D body2D, sources2D))
+                AddPart2D(networkObject, found, sceneId, root);
+                networkObject.GetComponentsInChildren(true, treeBodies2D);
+                foreach (Rigidbody2D rigidbody in treeBodies2D)
                 {
-                    found.Body2D = scenes.AddBody2D(networkObject, sceneId, body2D);
-                    found.World2D = scenes.WorldOf2D(sceneId);
-                    if (networkObject.TryGetComponent(out Rigidbody2D rigidbody2D))
+                    if (rigidbody.gameObject != root && ActiveInTree(rigidbody.transform, root.transform))
                     {
-                        found.Rigidbody2D = rigidbody2D;
-                        found.BodyType2D = rigidbody2D.bodyType;
-                        rigidbody2D.bodyType = RigidbodyType2D.Kinematic;
+                        AddPart2D(networkObject, found, sceneId, rigidbody.gameObject);
                     }
                 }
             }
@@ -523,8 +539,76 @@ namespace Fomoxa.Unity.Rapier
                 Debug.LogException(exception, networkObject);
             }
 
-            contacts.AddBody(networkObject, found.Body.IsValid ? found.World : null, sources, found.Body2D.IsValid ? found.World2D : null, sources2D);
+            treeBodies.Clear();
+            treeBodies2D.Clear();
             return found;
+        }
+
+        private void AddPart(NetworkObject networkObject, Bound found, uint sceneId, GameObject source)
+        {
+            var sources = new List<Collider>();
+            if (!BodyDescriptions.TryDescribe(source, out BodyDesc body, sources))
+            {
+                return;
+            }
+
+            var part = new BoundPart { Transform = source.transform, IsRoot = source == networkObject.gameObject, Body = scenes.AddBody(networkObject, sceneId, body) };
+            found.World = scenes.WorldOf(sceneId);
+            if (source.TryGetComponent(out Rigidbody rigidbody))
+            {
+                part.Rigidbody = rigidbody;
+                part.WasKinematic = rigidbody.isKinematic;
+                rigidbody.isKinematic = true;
+            }
+
+            if (part.IsRoot)
+            {
+                found.Body = part.Body;
+            }
+
+            found.Parts.Add(part);
+            found.Bodies.Add(part.Body);
+            contacts.AddBody(networkObject, found.World, part.Body.Handle, sources);
+        }
+
+        private void AddPart2D(NetworkObject networkObject, Bound found, uint sceneId, GameObject source)
+        {
+            var sources = new List<Collider2D>();
+            if (!BodyDescriptions.TryDescribe2D(source, out BodyDesc2D body, sources))
+            {
+                return;
+            }
+
+            var part = new BoundPart { Transform = source.transform, IsRoot = source == networkObject.gameObject, Body2D = scenes.AddBody2D(networkObject, sceneId, body) };
+            found.World2D = scenes.WorldOf2D(sceneId);
+            if (source.TryGetComponent(out Rigidbody2D rigidbody))
+            {
+                part.Rigidbody2D = rigidbody;
+                part.BodyType2D = rigidbody.bodyType;
+                rigidbody.bodyType = RigidbodyType2D.Kinematic;
+            }
+
+            if (part.IsRoot)
+            {
+                found.Body2D = part.Body2D;
+            }
+
+            found.Parts.Add(part);
+            found.Bodies2D.Add(part.Body2D);
+            contacts.AddBody2D(networkObject, found.World2D, part.Body2D.Handle, sources);
+        }
+
+        private static bool ActiveInTree(Transform node, Transform root)
+        {
+            for (Transform current = node; current != root; current = current.parent)
+            {
+                if (!current.gameObject.activeSelf)
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         private void Unbind(NetworkObject networkObject)
@@ -585,25 +669,67 @@ namespace Fomoxa.Unity.Rapier
 
         private sealed class Bound
         {
+            public readonly List<BoundPart> Parts = new List<BoundPart>();
+            public readonly List<PhysicsBody> Bodies = new List<PhysicsBody>();
+            public readonly List<PhysicsBody2D> Bodies2D = new List<PhysicsBody2D>();
             public PhysicsBody Body;
             public PhysicsBody2D Body2D;
             public RapierWorld World;
             public RapierWorld2D World2D;
+
+            public bool HasBody => Parts.Count > 0;
+
+            public void Restore(NetworkObject networkObject)
+            {
+                foreach (BoundPart part in Parts)
+                {
+                    part.Restore();
+                }
+            }
+        }
+
+        private sealed class BoundPart
+        {
+            public Transform Transform;
+            public bool IsRoot;
+            public PhysicsBody Body;
+            public PhysicsBody2D Body2D;
             public Rigidbody Rigidbody;
             public bool WasKinematic;
             public Rigidbody2D Rigidbody2D;
             public RigidbodyType2D BodyType2D;
             public bool IsProxy;
-            public Transform Transform;
             public bool Seen;
             public float SeenZ;
             public Transform SeenParent;
             public Vector3 SeenLocalPosition;
             public Quaternion SeenLocalRotation;
 
-            public bool HasBody => Body.IsValid || Body2D.IsValid;
+            public bool Shifted()
+            {
+                Transform parent = Transform.parent;
+                bool shifted = Seen && !ReferenceEquals(parent, SeenParent);
+                if (Body2D.IsValid)
+                {
+                    float z = Transform.position.z;
+                    shifted |= Seen && !z.Equals(SeenZ);
+                    SeenZ = z;
+                }
 
-            public void Restore(NetworkObject networkObject)
+                if (parent != null)
+                {
+                    Transform.GetLocalPositionAndRotation(out Vector3 localPosition, out Quaternion localRotation);
+                    shifted |= Seen && (!localPosition.Equals(SeenLocalPosition) || !localRotation.Equals(SeenLocalRotation));
+                    SeenLocalPosition = localPosition;
+                    SeenLocalRotation = localRotation;
+                }
+
+                SeenParent = parent;
+                Seen = true;
+                return shifted;
+            }
+
+            public void Restore()
             {
                 if (Rigidbody != null)
                 {

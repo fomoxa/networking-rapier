@@ -327,27 +327,9 @@ namespace Fomoxa.Networking.Rapier
             return history;
         }
 
-        public void PlaceProxy(INetworkEntity entity)
-        {
-            if (entity == null || !bodies.TryGetValue(entity, out List<Part> parts))
-            {
-                return;
-            }
+        public void PlaceProxy(INetworkEntity entity, PhysicsBody body) => PlaceProxy(entity, body.Handle, false);
 
-            for (int index = 0; index < parts.Count; index++)
-            {
-                Part part = parts[index];
-                if (part.ProxiedFrom.HasValue || !part.World.Contains(part.Handle))
-                {
-                    continue;
-                }
-
-                BodyKind kind = part.World.GetKind(part.Handle);
-                part.World.SetKind(part.Handle, BodyKind.Kinematic);
-                part.World.SetRewindable(part.Handle, false);
-                parts[index] = new Part(part.World, part.Handle, kind);
-            }
-        }
+        public void PlaceProxy(INetworkEntity entity, PhysicsBody2D body) => PlaceProxy(entity, body.Handle, true);
 
         public void EndProxy(INetworkEntity entity)
         {
@@ -412,6 +394,28 @@ namespace Fomoxa.Networking.Rapier
             unowned.Clear();
             unowned2D.Clear();
             released.Clear();
+        }
+
+        private void PlaceProxy(INetworkEntity entity, BodyHandle handle, bool is2D)
+        {
+            if (entity == null || !bodies.TryGetValue(entity, out List<Part> parts))
+            {
+                return;
+            }
+
+            for (int index = 0; index < parts.Count; index++)
+            {
+                Part part = parts[index];
+                if ((part.World is IPhysicsWorld2D) != is2D || !part.Handle.Equals(handle) || part.ProxiedFrom.HasValue || !part.World.Contains(part.Handle))
+                {
+                    continue;
+                }
+
+                BodyKind kind = part.World.GetKind(part.Handle);
+                part.World.SetKind(part.Handle, BodyKind.Kinematic);
+                part.World.SetRewindable(part.Handle, false);
+                parts[index] = new Part(part.World, part.Handle, kind);
+            }
         }
 
         private static void Remember(Dictionary<uint, List<uint>> remembered, uint sceneId, List<uint> masks)
