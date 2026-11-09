@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Numerics;
 using Fomoxa.Networking.Simulation;
@@ -26,10 +27,37 @@ namespace Fomoxa.Networking.Rapier.Bench
             (new Vector3(0.15f, 0f, -1.05f), 0.1f),
         };
 
-        public Ragdoll()
-            : base(RagdollPrefabId, Behaviours())
+        private static readonly (int Parent, JointKind Kind)[] Joints =
+        {
+            (-1, JointKind.Spherical),
+            (-1, JointKind.Spherical),
+            (-1, JointKind.Spherical),
+            (1, JointKind.Revolute),
+            (2, JointKind.Revolute),
+            (-1, JointKind.Spherical),
+            (5, JointKind.Spherical),
+            (5, JointKind.Spherical),
+            (6, JointKind.Revolute),
+            (7, JointKind.Revolute),
+        };
+
+        private static readonly Quaternion ElbowAxis = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, MathF.PI / 2f);
+
+        public Ragdoll(RapierScenes joints)
+            : this(joints, new Part(null))
         {
         }
+
+        private Ragdoll(RapierScenes joints, Part torso)
+            : base(RagdollPrefabId, Behaviours(torso))
+        {
+            if (joints != null)
+            {
+                torso.Started = () => CreateJoints(joints);
+            }
+        }
+
+        public static int JointCount => Joints.Length;
 
         public static int BodyCount => Limbs.Length + 1;
 
@@ -49,16 +77,33 @@ namespace Fomoxa.Networking.Rapier.Bench
             }
         }
 
-        private static EntityBehaviour[] Behaviours()
+        private static EntityBehaviour[] Behaviours(Part torso)
         {
             var behaviours = new EntityBehaviour[Limbs.Length + 1];
-            behaviours[0] = new Part(null);
+            behaviours[0] = torso;
             for (int index = 0; index < Limbs.Length; index++)
             {
                 behaviours[index + 1] = new Part(ChildBody.Of(index));
             }
 
             return behaviours;
+        }
+
+        private static Vector3 PositionOf(int limb) => limb < 0 ? Vector3.Zero : Limbs[limb].Position;
+
+        private void CreateJoints(RapierScenes joints)
+        {
+            for (int limb = 0; limb < Joints.Length; limb++)
+            {
+                (int parent, JointKind kind) = Joints[limb];
+                Vector3 pivot = (PositionOf(parent) + PositionOf(limb)) / 2f;
+                Quaternion frame = kind == JointKind.Revolute && Limbs[limb].Position.Z > 0f ? ElbowAxis : Quaternion.Identity;
+                var desc = new JointDesc(kind, pivot - PositionOf(parent), frame, pivot - PositionOf(limb), frame);
+                desc = kind == JointKind.Revolute
+                    ? desc.WithLimit(new JointLimit(-1.2f, 1.2f))
+                    : desc.WithLimit(new JointLimit(-0.3f, 0.3f)).WithSwingLimits(new JointLimit(-0.6f, 0.6f), new JointLimit(-0.6f, 0.6f));
+                joints.CreateJoint(this, Bodies[parent + 1], Bodies[limb + 1], desc);
+            }
         }
 
         private sealed class Part : EntityBehaviour, ITransformReceiver
@@ -68,6 +113,10 @@ namespace Fomoxa.Networking.Rapier.Bench
                 ITransformSource source = body.HasValue ? new ChildBodySource(this, body.Value) : (ITransformSource)new EntityPoseSource(this);
                 SetTransform(new TransformSync(Settings), new CountedSource(source), this, body.HasValue ? TransformTarget.BodyRoot : TransformTarget.EntityPose);
             }
+
+            public Action Started { get; set; }
+
+            public override void OnStartServer() => Started?.Invoke();
 
             public void ResetReceive()
             {

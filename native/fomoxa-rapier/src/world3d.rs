@@ -7,9 +7,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::contact::{collider_ref, collider_tag, write_items, write_refs, FrColliderRef};
 use crate::hash::StableHasher;
+use crate::joint::*;
 use crate::query::FrQueryFilter;
 
-const SNAPSHOT_FORMAT: u32 = 3;
+const SNAPSHOT_FORMAT: u32 = 4;
 const ALL_LAYERS: u32 = u32::MAX;
 
 const LOCK_POSITION_X: u32 = 1;
@@ -85,6 +86,23 @@ pub struct FrQueryShape {
     pub half_height: f32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
+pub struct FrJoint {
+    pub kind: u32,
+    pub position1: [f32; 3],
+    pub rotation1: [f32; 4],
+    pub position2: [f32; 3],
+    pub rotation2: [f32; 4],
+    pub limits: [FrJointLimit; 3],
+    pub motor: FrJointMotor,
+    pub length: f32,
+    pub stiffness: f32,
+    pub damping: f32,
+    pub softness: FrJointSoftness,
+    pub contacts_enabled: u32,
+}
+
 #[derive(Clone)]
 enum ShapeRecipe {
     Box([f32; 3]),
@@ -131,6 +149,13 @@ struct BodyEntry {
     rewindable: bool,
 }
 
+struct JointEntry {
+    handle: ImpulseJointHandle,
+    body1: u32,
+    body2: u32,
+    recipe: FrJoint,
+}
+
 #[derive(Serialize)]
 struct SnapshotRef<'a> {
     format: u32,
@@ -138,6 +163,8 @@ struct SnapshotRef<'a> {
     handles: Vec<(u32, u32, u32)>,
     statics: Vec<(u32, u32, u32)>,
     dirty: Vec<(u32, u32)>,
+    joints: Vec<(u32, u32, u32, FrJoint)>,
+    anchor: Option<(u32, u32)>,
 }
 
 #[derive(Deserialize)]
@@ -147,6 +174,8 @@ struct Snapshot {
     handles: Vec<(u32, u32, u32)>,
     statics: Vec<(u32, u32, u32)>,
     dirty: Vec<(u32, u32)>,
+    joints: Vec<(u32, u32, u32, FrJoint)>,
+    anchor: Option<(u32, u32)>,
 }
 
 pub struct World {
@@ -160,6 +189,9 @@ pub struct World {
     written: BTreeSet<u32>,
     moved: Vec<u32>,
     dirty: BTreeSet<(u32, u32)>,
+    joints: BTreeMap<u32, JointEntry>,
+    next_joint: u32,
+    anchor: Option<RigidBodyHandle>,
 }
 
 impl World {
@@ -177,6 +209,9 @@ impl World {
             written: BTreeSet::new(),
             moved: Vec::new(),
             dirty: BTreeSet::new(),
+            joints: BTreeMap::new(),
+            next_joint: 1,
+            anchor: None,
         }
     }
 
@@ -315,9 +350,98 @@ impl World {
         match self.bodies.remove(&id) {
             Some(entry) => {
                 self.physics.remove_body(entry.handle);
+                self.joints.retain(|_, joint| joint.body1 != id && joint.body2 != id);
                 true
             }
             None => false,
+        }
+    }
+
+    fn joint_body(&mut self, id: u32) -> Option<RigidBodyHandle> {
+        if id != 0 {
+            return self.bodies.get(&id).map(|entry| entry.handle);
+        }
+
+        if self.anchor.is_none() {
+            self.anchor = Some(self.physics.insert_body(RigidBodyBuilder::fixed().build()));
+        }
+
+        self.anchor
+    }
+
+    fn create_joint(&mut self, body1: u32, body2: u32, recipe: FrJoint) -> u32 {
+        if body1 == 0 || body1 == body2 || !self.bodies.contains_key(&body1) || (body2 != 0 && !self.bodies.contains_key(&body2)) {
+            return 0;
+        }
+
+        let joint = match build_joint(&recipe) {
+            Some(joint) => joint,
+            None => return 0,
+        };
+        let (handle1, handle2) = match (self.joint_body(body1), self.joint_body(body2)) {
+            (Some(handle1), Some(handle2)) => (handle1, handle2),
+            _ => return 0,
+        };
+        let handle = self.physics.insert_impulse_joint(handle1, handle2, joint);
+        let id = self.next_joint;
+        self.next_joint += 1;
+        self.joints.insert(id, JointEntry { handle, body1, body2, recipe });
+        id
+    }
+
+    fn remove_joint(&mut self, id: u32) -> bool {
+        match self.joints.remove(&id) {
+            Some(entry) => {
+                self.physics.remove_impulse_joint(entry.handle);
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn set_joint(&mut self, id: u32, recipe: FrJoint) -> bool {
+        let joint = match build_joint(&recipe) {
+            Some(joint) => joint,
+            None => return false,
+        };
+        let entry = match self.joints.get_mut(&id) {
+            Some(entry) => entry,
+            None => return false,
+        };
+        match self.physics.impulse_joints.get_mut(entry.handle, true) {
+            Some(found) => {
+                found.data = joint;
+                entry.recipe = recipe;
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn restore_joints(&mut self, saved: Vec<(u32, u32, u32, FrJoint)>) {
+        let saved: BTreeMap<u32, (ImpulseJointHandle, FrJoint)> = saved
+            .into_iter()
+            .map(|(id, index, generation, recipe)| (id, (ImpulseJointHandle::from_raw_parts(index, generation), recipe)))
+            .collect();
+        let current = std::mem::take(&mut self.joints);
+        for (id, (handle, _)) in &saved {
+            if !current.contains_key(id) {
+                self.physics.remove_impulse_joint(*handle);
+            }
+        }
+
+        for (id, entry) in current {
+            if let Some((handle, recipe)) = saved.get(&id) {
+                if self.physics.impulse_joints.get(*handle).is_some() {
+                    self.joints.insert(id, JointEntry { handle: *handle, body1: entry.body1, body2: entry.body2, recipe: *recipe });
+                    continue;
+                }
+            }
+
+            if let (Some(joint), Some(handle1), Some(handle2)) = (build_joint(&entry.recipe), self.joint_body(entry.body1), self.joint_body(entry.body2)) {
+                let handle = self.physics.insert_impulse_joint(handle1, handle2, joint);
+                self.joints.insert(id, JointEntry { handle, ..entry });
+            }
         }
     }
 
@@ -400,7 +524,16 @@ impl World {
             })
             .collect();
         let dirty = self.dirty.iter().copied().collect();
-        let snapshot = SnapshotRef { format: SNAPSHOT_FORMAT, world: &self.physics, handles, statics, dirty };
+        let joints = self
+            .joints
+            .iter()
+            .map(|(id, entry)| {
+                let (index, generation) = entry.handle.into_raw_parts();
+                (*id, index, generation, entry.recipe)
+            })
+            .collect();
+        let anchor = self.anchor.map(|handle| handle.into_raw_parts());
+        let snapshot = SnapshotRef { format: SNAPSHOT_FORMAT, world: &self.physics, handles, statics, dirty, joints, anchor };
         self.scratch = bincode::serialize(&snapshot).unwrap_or_default();
         self.scratch.len()
     }
@@ -427,6 +560,7 @@ impl World {
             .map(|(id, index, generation)| (*id, RigidBodyHandle::from_raw_parts(*index, *generation)))
             .collect();
         self.physics = snapshot.world;
+        self.anchor = snapshot.anchor.map(|(index, generation)| RigidBodyHandle::from_raw_parts(index, generation));
         self.dirty = snapshot.dirty.into_iter().collect();
         self.restore_statics(&snapshot.statics);
         let entries = std::mem::take(&mut self.bodies);
@@ -463,6 +597,7 @@ impl World {
             }
         }
 
+        self.restore_joints(snapshot.joints);
         true
     }
 
@@ -718,6 +853,39 @@ fn pose(position: [f32; 3], rotation: [f32; 4]) -> Pose {
         Vector::new(position[0], position[1], position[2]),
         Rotation::from_xyzw(rotation[0], rotation[1], rotation[2], rotation[3]),
     )
+}
+
+fn build_joint(recipe: &FrJoint) -> Option<GenericJoint> {
+    let (mut joint, axes): (GenericJoint, &[JointAxis]) = match recipe.kind {
+        JOINT_FIXED => (GenericJoint::new(JointAxesMask::LOCKED_FIXED_AXES), &[]),
+        JOINT_REVOLUTE => (GenericJoint::new(JointAxesMask::LOCKED_REVOLUTE_AXES), &[JointAxis::AngX]),
+        JOINT_PRISMATIC => (GenericJoint::new(JointAxesMask::LOCKED_PRISMATIC_AXES), &[JointAxis::LinX]),
+        JOINT_SPHERICAL => (GenericJoint::new(JointAxesMask::LOCKED_SPHERICAL_AXES), &[JointAxis::AngX, JointAxis::AngY, JointAxis::AngZ]),
+        JOINT_ROPE if recipe.length > 0.0 => (RopeJoint::new(recipe.length).data, &[JointAxis::LinX]),
+        JOINT_SPRING if recipe.length >= 0.0 => (SpringJoint::new(recipe.length, recipe.stiffness, recipe.damping).data, &[]),
+        _ => return None,
+    };
+    joint.set_local_frame1(pose(recipe.position1, recipe.rotation1));
+    joint.set_local_frame2(pose(recipe.position2, recipe.rotation2));
+    joint.set_contacts_enabled(recipe.contacts_enabled != 0);
+    if recipe.softness.frequency > 0.0 {
+        joint.softness = SpringCoefficients::new(recipe.softness.frequency, recipe.softness.damping_ratio);
+    }
+
+    for (axis, limit) in axes.iter().zip(&recipe.limits) {
+        if limit.enabled != 0 && limit.min <= limit.max {
+            joint.set_limits(*axis, [limit.min, limit.max]);
+        }
+    }
+
+    let motor = &recipe.motor;
+    if let Some(axis) = axes.first().filter(|_| motor.enabled != 0 && recipe.kind != JOINT_ROPE) {
+        joint.set_motor_model(*axis, MotorModel::ForceBased);
+        joint.set_motor(*axis, motor.target_position, motor.target_velocity, motor.stiffness, motor.damping);
+        joint.set_motor_max_force(*axis, motor.max_force);
+    }
+
+    Some(joint)
 }
 
 fn body_type(kind: u32) -> RigidBodyType {
@@ -990,6 +1158,32 @@ pub unsafe extern "C" fn fr_body_create(
 #[no_mangle]
 pub unsafe extern "C" fn fr_body_remove(world_ptr: *mut World, body: u32) -> bool {
     world(world_ptr).map_or(false, |world| world.remove_body(body))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fr_joint_create(world_ptr: *mut World, body1: u32, body2: u32, joint: *const FrJoint) -> u32 {
+    match (world(world_ptr), joint.as_ref()) {
+        (Some(world), Some(joint)) => world.create_joint(body1, body2, *joint),
+        _ => 0,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fr_joint_remove(world_ptr: *mut World, joint: u32) -> bool {
+    world(world_ptr).map_or(false, |world| world.remove_joint(joint))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fr_joint_contains(world_ptr: *mut World, joint: u32) -> bool {
+    world(world_ptr).map_or(false, |world| world.joints.contains_key(&joint))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fr_joint_set(world_ptr: *mut World, joint: u32, recipe: *const FrJoint) -> bool {
+    match (world(world_ptr), recipe.as_ref()) {
+        (Some(world), Some(recipe)) => world.set_joint(joint, *recipe),
+        _ => false,
+    }
 }
 
 #[no_mangle]

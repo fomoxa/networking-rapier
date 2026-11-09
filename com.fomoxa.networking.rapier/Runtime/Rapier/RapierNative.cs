@@ -172,6 +172,135 @@ namespace Fomoxa.Networking.Rapier
             public float Distance;
         }
 
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct JointLimit
+        {
+            public uint Enabled;
+            public float Min;
+            public float Max;
+
+            public static JointLimit Of(in Rapier.JointLimit limit) => new JointLimit { Enabled = limit.IsEnabled ? 1u : 0u, Min = limit.Min, Max = limit.Max };
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct JointMotor
+        {
+            public uint Enabled;
+            public float TargetPosition;
+            public float TargetVelocity;
+            public float Stiffness;
+            public float Damping;
+            public float MaxForce;
+
+            public static JointMotor Of(in JointMotorDesc motor) => new JointMotor
+            {
+                Enabled = motor.IsEnabled ? 1u : 0u,
+                TargetPosition = motor.TargetPosition,
+                TargetVelocity = motor.TargetVelocity,
+                Stiffness = motor.Stiffness,
+                Damping = motor.Damping,
+                MaxForce = motor.MaxForce,
+            };
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct Joint
+        {
+            public uint Kind;
+            public float Position1X;
+            public float Position1Y;
+            public float Position1Z;
+            public float Rotation1X;
+            public float Rotation1Y;
+            public float Rotation1Z;
+            public float Rotation1W;
+            public float Position2X;
+            public float Position2Y;
+            public float Position2Z;
+            public float Rotation2X;
+            public float Rotation2Y;
+            public float Rotation2Z;
+            public float Rotation2W;
+            public JointLimit Limit;
+            public JointLimit SwingLimitY;
+            public JointLimit SwingLimitZ;
+            public JointMotor Motor;
+            public float Length;
+            public float Stiffness;
+            public float Damping;
+            public float SoftnessFrequency;
+            public float SoftnessDampingRatio;
+            public uint ContactsEnabled;
+
+            public static Joint Of(in JointDesc desc) => new Joint
+            {
+                Kind = (uint)desc.Kind,
+                Position1X = desc.AnchorA.X,
+                Position1Y = desc.AnchorA.Y,
+                Position1Z = desc.AnchorA.Z,
+                Rotation1X = desc.FrameA.X,
+                Rotation1Y = desc.FrameA.Y,
+                Rotation1Z = desc.FrameA.Z,
+                Rotation1W = desc.FrameA.W,
+                Position2X = desc.AnchorB.X,
+                Position2Y = desc.AnchorB.Y,
+                Position2Z = desc.AnchorB.Z,
+                Rotation2X = desc.FrameB.X,
+                Rotation2Y = desc.FrameB.Y,
+                Rotation2Z = desc.FrameB.Z,
+                Rotation2W = desc.FrameB.W,
+                Limit = JointLimit.Of(desc.Limit),
+                SwingLimitY = JointLimit.Of(desc.SwingLimitY),
+                SwingLimitZ = JointLimit.Of(desc.SwingLimitZ),
+                Motor = JointMotor.Of(desc.Motor),
+                Length = desc.Length,
+                Stiffness = desc.Stiffness,
+                Damping = desc.Damping,
+                SoftnessFrequency = desc.Softness.Frequency,
+                SoftnessDampingRatio = desc.Softness.DampingRatio,
+                ContactsEnabled = desc.ContactsEnabled ? 1u : 0u,
+            };
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct Joint2D
+        {
+            public uint Kind;
+            public float Position1X;
+            public float Position1Y;
+            public float Rotation1;
+            public float Position2X;
+            public float Position2Y;
+            public float Rotation2;
+            public JointLimit Limit;
+            public JointMotor Motor;
+            public float Length;
+            public float Stiffness;
+            public float Damping;
+            public float SoftnessFrequency;
+            public float SoftnessDampingRatio;
+            public uint ContactsEnabled;
+
+            public static Joint2D Of(in JointDesc2D desc) => new Joint2D
+            {
+                Kind = (uint)desc.Kind,
+                Position1X = desc.AnchorA.X,
+                Position1Y = desc.AnchorA.Y,
+                Rotation1 = desc.FrameA,
+                Position2X = desc.AnchorB.X,
+                Position2Y = desc.AnchorB.Y,
+                Rotation2 = desc.FrameB,
+                Limit = JointLimit.Of(desc.Limit),
+                Motor = JointMotor.Of(desc.Motor),
+                Length = desc.Length,
+                Stiffness = desc.Stiffness,
+                Damping = desc.Damping,
+                SoftnessFrequency = desc.Softness.Frequency,
+                SoftnessDampingRatio = desc.Softness.DampingRatio,
+                ContactsEnabled = desc.ContactsEnabled ? 1u : 0u,
+            };
+        }
+
         [DllImport(Library)]
         internal static extern IntPtr fr_world_create(float gravityX, float gravityY, float gravityZ);
 
@@ -202,6 +331,21 @@ namespace Fomoxa.Networking.Rapier
         [DllImport(Library)]
         [return: MarshalAs(UnmanagedType.U1)]
         internal static extern bool fr_body_contains(IntPtr world, uint body);
+
+        [DllImport(Library)]
+        internal static extern uint fr_joint_create(IntPtr world, uint body1, uint body2, in Joint joint);
+
+        [DllImport(Library)]
+        [return: MarshalAs(UnmanagedType.U1)]
+        internal static extern bool fr_joint_remove(IntPtr world, uint joint);
+
+        [DllImport(Library)]
+        [return: MarshalAs(UnmanagedType.U1)]
+        internal static extern bool fr_joint_contains(IntPtr world, uint joint);
+
+        [DllImport(Library)]
+        [return: MarshalAs(UnmanagedType.U1)]
+        internal static extern bool fr_joint_set(IntPtr world, uint joint, in Joint recipe);
 
         [DllImport(Library)]
         [return: MarshalAs(UnmanagedType.U1)]
@@ -362,6 +506,21 @@ namespace Fomoxa.Networking.Rapier
         [DllImport(Library)]
         [return: MarshalAs(UnmanagedType.U1)]
         internal static extern bool fr2_body_contains(IntPtr world, uint body);
+
+        [DllImport(Library)]
+        internal static extern uint fr2_joint_create(IntPtr world, uint body1, uint body2, in Joint2D joint);
+
+        [DllImport(Library)]
+        [return: MarshalAs(UnmanagedType.U1)]
+        internal static extern bool fr2_joint_remove(IntPtr world, uint joint);
+
+        [DllImport(Library)]
+        [return: MarshalAs(UnmanagedType.U1)]
+        internal static extern bool fr2_joint_contains(IntPtr world, uint joint);
+
+        [DllImport(Library)]
+        [return: MarshalAs(UnmanagedType.U1)]
+        internal static extern bool fr2_joint_set(IntPtr world, uint joint, in Joint2D recipe);
 
         [DllImport(Library)]
         [return: MarshalAs(UnmanagedType.U1)]

@@ -21,6 +21,7 @@ namespace Fomoxa.Networking.Rapier.Bench
         private readonly int fallingTicks;
         private readonly int settleTicks;
         private readonly int restingTicks;
+        private readonly bool joints;
         private readonly FomoxaRegistry registry = TestObjects.Registry();
         private readonly NetworkSettings settings = new NetworkSettings { PhysicsBackend = PhysicsBackend.Rapier };
         private readonly List<Exception> logged = new List<Exception>();
@@ -29,8 +30,9 @@ namespace Fomoxa.Networking.Rapier.Bench
         private NetworkRuntime client;
         private TimeSpan now;
 
-        public RagdollBench(int ragdolls, int fallingTicks, int settleTicks, int restingTicks)
+        public RagdollBench(int ragdolls, bool joints, int fallingTicks, int settleTicks, int restingTicks)
         {
+            this.joints = joints;
             this.ragdolls = ragdolls;
             this.fallingTicks = fallingTicks;
             this.settleTicks = settleTicks;
@@ -45,7 +47,7 @@ namespace Fomoxa.Networking.Rapier.Bench
                 float half = (MathF.Ceiling(MathF.Sqrt(ragdolls)) * Spacing) + Spacing;
                 physics.AddStatic(0, new[] { new ColliderDesc(BodyShape.Box(new Vector3(half, 0.5f, half)), new Vector3(0f, -0.5f, 0f), Quaternion.Identity, ColliderMaterial.Default, 0, false) });
                 Connect(physics);
-                Spawn();
+                Spawn(physics);
                 PhaseResult falling = Measure(fallingTicks);
                 for (int tick = 0; tick < settleTicks; tick++)
                 {
@@ -74,9 +76,9 @@ namespace Fomoxa.Networking.Rapier.Bench
             var factory = new LoopbackFactory();
             var log = new NetworkLog(logged.Add, message => { });
             var serverPrefabs = new StandalonePrefabs();
-            serverPrefabs.Register(Ragdoll.RagdollPrefabId, Ragdoll.Fingerprint, () => new Ragdoll());
+            serverPrefabs.Register(Ragdoll.RagdollPrefabId, Ragdoll.Fingerprint, () => new Ragdoll(null));
             var clientPrefabs = new StandalonePrefabs();
-            clientPrefabs.Register(Ragdoll.RagdollPrefabId, Ragdoll.Fingerprint, () => new Ragdoll());
+            clientPrefabs.Register(Ragdoll.RagdollPrefabId, Ragdoll.Fingerprint, () => new Ragdoll(null));
             var scenes = new EmptySceneFiles();
             server = StandaloneRuntime.Create(registry, settings, factory, serverPrefabs, new StandaloneBehaviours(), scenes, () => now, log, physics);
             client = StandaloneRuntime.Create(registry, settings, factory, clientPrefabs, new StandaloneBehaviours(), scenes, () => now, log);
@@ -93,12 +95,12 @@ namespace Fomoxa.Networking.Rapier.Bench
             }
         }
 
-        private void Spawn()
+        private void Spawn(RapierScenes physics)
         {
             int side = (int)MathF.Ceiling(MathF.Sqrt(ragdolls));
             for (int index = 0; index < ragdolls; index++)
             {
-                var ragdoll = new Ragdoll { Position = new Vector3(((index % side) - (side / 2f)) * Spacing, DropHeight, ((index / side) - (side / 2f)) * Spacing) };
+                var ragdoll = new Ragdoll(joints ? physics : null) { Position = new Vector3(((index % side) - (side / 2f)) * Spacing, DropHeight, ((index / side) - (side / 2f)) * Spacing) };
                 server.ServerManager.Spawn(ragdoll);
             }
         }

@@ -46,26 +46,30 @@ namespace Fomoxa.Networking.Rapier.Bench
             }
 
             Console.WriteLine($"{RuntimeInformation.OSDescription}, {RuntimeInformation.ProcessArchitecture}, {Environment.ProcessorCount} logical processors, {RuntimeInformation.FrameworkDescription}");
-            Console.WriteLine($"{Ragdoll.BodyCount} bodies per ragdoll, no joints; falling: the first {fallingTicks} ticks after the spawn; resting: {restingTicks} ticks after {settleTicks} more");
+            Console.WriteLine($"{Ragdoll.BodyCount} bodies per ragdoll, without joints or with {Ragdoll.JointCount}; falling: the first {fallingTicks} ticks after the spawn; resting: {restingTicks} ticks after {settleTicks} more");
             Console.WriteLine();
-            Console.WriteLine("| Ragdolls | Bodies | Phase | Mean ms | p50 ms | p95 ms | Max ms | Slots read per tick |");
-            Console.WriteLine("|---:|---:|---|---:|---:|---:|---:|---:|");
+            Console.WriteLine("| Ragdolls | Bodies | Joints | Phase | Mean ms | p50 ms | p95 ms | Max ms | Slots read per tick |");
+            Console.WriteLine("|---:|---:|---:|---|---:|---:|---:|---:|---:|");
             foreach (int count in ragdolls)
             {
-                (PhaseResult falling, PhaseResult resting) = new RagdollBench(count, fallingTicks, settleTicks, restingTicks).Run();
-                Print(count, "falling", falling);
-                Print(count, "resting", resting);
+                foreach (bool joints in new[] { false, true })
+                {
+                    (PhaseResult falling, PhaseResult resting) = new RagdollBench(count, joints, fallingTicks, settleTicks, restingTicks).Run();
+                    Print(count, joints, "falling", falling);
+                    Print(count, joints, "resting", resting);
+                }
             }
 
             return 0;
         }
 
-        private static void Print(int ragdolls, string phase, PhaseResult result) =>
+        private static void Print(int ragdolls, bool joints, string phase, PhaseResult result) =>
             Console.WriteLine(string.Format(
                 CultureInfo.InvariantCulture,
-                "| {0} | {1} | {2} | {3:F3} | {4:F3} | {5:F3} | {6:F3} | {7:F1} |",
+                "| {0} | {1} | {2} | {3} | {4:F3} | {5:F3} | {6:F3} | {7:F3} | {8:F1} |",
                 ragdolls,
                 ragdolls * Ragdoll.BodyCount,
+                joints ? ragdolls * Ragdoll.JointCount : 0,
                 phase,
                 result.MeanMs,
                 result.MedianMs,

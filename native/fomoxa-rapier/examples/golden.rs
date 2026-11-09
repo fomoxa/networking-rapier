@@ -10,6 +10,9 @@ const IDENTITY: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 const TURNED: [f32; 4] = [0.6, 0.0, 0.0, 0.8];
 const FORCE_STEPS: u32 = 60;
 const CCD_STEPS: u32 = 3;
+const JOINT_STEPS: u32 = 120;
+const JOINT_SNAPSHOT_AT: u32 = 60;
+const JOINT_RETUNE_AT: u32 = 70;
 const ALL: FrQueryFilter = FrQueryFilter { layer_mask: u32::MAX, exclude_body: 0, include_triggers: 1 };
 
 fn collider(shape: u32, half_extents: [f32; 3], radius: f32, half_height: f32, points: &[f32], triangles: &[u32]) -> FrCollider {
@@ -82,6 +85,52 @@ unsafe fn step_2d(world: *mut World2D, bodies: &[u32], tick: u32) {
 
     fr2_body_add_force(world, bodies[tick as usize * 3 % count], 4.0, 0.0);
     fr2_world_step(world, SECONDS);
+}
+
+fn joint_3d(kind: u32, position1: [f32; 3], position2: [f32; 3]) -> FrJoint {
+    FrJoint {
+        kind,
+        position1,
+        rotation1: IDENTITY,
+        position2,
+        rotation2: IDENTITY,
+        limits: [FrJointLimit::default(); 3],
+        motor: FrJointMotor::default(),
+        length: 0.0,
+        stiffness: 0.0,
+        damping: 0.0,
+        softness: FrJointSoftness::default(),
+        contacts_enabled: 0,
+    }
+}
+
+fn joint_2d(kind: u32, position1: [f32; 2], position2: [f32; 2]) -> FrJoint2D {
+    FrJoint2D {
+        kind,
+        position1,
+        rotation1: 0.0,
+        position2,
+        rotation2: 0.0,
+        limit: FrJointLimit::default(),
+        motor: FrJointMotor::default(),
+        length: 0.0,
+        stiffness: 0.0,
+        damping: 0.0,
+        softness: FrJointSoftness::default(),
+        contacts_enabled: 0,
+    }
+}
+
+fn limit(min: f32, max: f32) -> FrJointLimit {
+    FrJointLimit { enabled: 1, min, max }
+}
+
+fn velocity_motor(target_velocity: f32) -> FrJointMotor {
+    FrJointMotor { enabled: 1, target_position: 0.0, target_velocity, stiffness: 0.0, damping: 50.0, max_force: 20.0 }
+}
+
+fn position_motor(target_position: f32) -> FrJointMotor {
+    FrJointMotor { enabled: 1, target_position, target_velocity: 0.0, stiffness: 40.0, damping: 4.0, max_force: 100.0 }
 }
 
 fn ids(found: &[u32]) -> String {
@@ -212,6 +261,80 @@ unsafe fn contacts_3d(world: *mut World, bodies: &[u32]) {
     println!("3d contacts {} {:08x}", total, depth.to_bits());
 }
 
+unsafe fn joints_3d() {
+    let world = fr_world_create(0.0, -9.81, 0.0);
+    let link = collider(0, [0.4, 0.1, 0.1], 0.0, 0.0, &[], &[]);
+    let mut links = Vec::new();
+    for index in 0..6u32 {
+        let position = [0.5 + index as f32, 10.0, 0.0];
+        links.push(fr_body_create(world, 0, position.as_ptr(), IDENTITY.as_ptr(), 1.0, 0, 1.0, 0.0, 0.0, false, &link, 1));
+    }
+
+    let mut hinge = joint_3d(1, [-0.5, 0.0, 0.0], [0.0, 10.0, 0.0]);
+    hinge.rotation1 = [0.0, -0.707_106_77, 0.0, 0.707_106_77];
+    hinge.rotation2 = hinge.rotation1;
+    hinge.limits[0] = limit(-1.2, 1.2);
+    hinge.motor = velocity_motor(0.5);
+    let hinge_id = fr_joint_create(world, links[0], 0, &hinge);
+    let mut ball = joint_3d(3, [0.5, 0.0, 0.0], [-0.5, 0.0, 0.0]);
+    ball.limits = [limit(-0.3, 0.3), limit(-0.6, 0.6), limit(-0.6, 0.6)];
+    fr_joint_create(world, links[0], links[1], &ball);
+    let mut slider = joint_3d(2, [0.5, 0.0, 0.0], [-0.5, 0.0, 0.0]);
+    slider.limits[0] = limit(-0.2, 0.2);
+    slider.motor = position_motor(0.1);
+    fr_joint_create(world, links[1], links[2], &slider);
+    let mut weld = joint_3d(0, [0.5, 0.0, 0.0], [-0.5, 0.0, 0.0]);
+    weld.softness = FrJointSoftness { frequency: 10.0, damping_ratio: 1.0 };
+    fr_joint_create(world, links[2], links[3], &weld);
+    let mut rope = joint_3d(4, [0.5, 0.0, 0.0], [-0.5, 0.0, 0.0]);
+    rope.length = 1.5;
+    let rope_id = fr_joint_create(world, links[3], links[4], &rope);
+    let mut spring = joint_3d(5, [0.5, 0.0, 0.0], [-0.5, 0.0, 0.0]);
+    spring.length = 1.0;
+    spring.stiffness = 30.0;
+    spring.damping = 2.0;
+    fr_joint_create(world, links[4], links[5], &spring);
+
+    let mut saved = Vec::new();
+    let mut late = 0;
+    let mut at_snapshot = 0;
+    for tick in 1..=JOINT_STEPS {
+        if tick == JOINT_SNAPSHOT_AT + 1 {
+            let mut tether = joint_3d(4, [0.5, 0.0, 0.0], [8.0, 12.0, 0.0]);
+            tether.length = 3.0;
+            late = fr_joint_create(world, links[5], 0, &tether);
+        }
+
+        if tick == JOINT_RETUNE_AT {
+            hinge.motor = velocity_motor(-1.0);
+            assert!(fr_joint_set(world, hinge_id, &hinge));
+        }
+
+        fr_world_step(world, SECONDS);
+        if tick == JOINT_SNAPSHOT_AT {
+            at_snapshot = fr_world_hash(world);
+            saved = snapshot_3d(world);
+        }
+    }
+
+    let at_end = fr_world_hash(world);
+    println!("3d joints {:016x} {:016x}", at_snapshot, at_end);
+    assert!(fr_world_load(world, saved.as_ptr(), saved.len() as u32));
+    for tick in JOINT_SNAPSHOT_AT + 1..=JOINT_STEPS {
+        if tick == JOINT_RETUNE_AT {
+            assert!(fr_joint_set(world, hinge_id, &hinge));
+        }
+
+        fr_world_step(world, SECONDS);
+    }
+
+    println!("3d joints replay {}", fr_world_hash(world) == at_end);
+    assert!(fr_joint_remove(world, rope_id));
+    assert!(fr_world_load(world, saved.as_ptr(), saved.len() as u32));
+    println!("3d joints load {} {}", fr_joint_contains(world, late), fr_joint_contains(world, rope_id));
+    fr_world_destroy(world);
+}
+
 unsafe fn run_3d() {
     let world = fr_world_create(0.0, -9.81, 0.0);
     let ground_points = [-50.0, 0.0, -50.0, 50.0, 2.0, -50.0, 50.0, 0.0, 50.0, -50.0, 3.0, 50.0];
@@ -264,6 +387,7 @@ unsafe fn run_3d() {
     ccd_3d(world);
     contacts_3d(world, &bodies);
     fr_world_destroy(world);
+    joints_3d();
 }
 
 unsafe fn position_2d(world: *mut World2D, body: u32) -> [f32; 2] {
@@ -376,6 +500,75 @@ unsafe fn run_2d() {
     forces_2d(world, &bodies);
     ccd_2d(world);
     contacts_2d(world, &bodies);
+    fr2_world_destroy(world);
+    joints_2d();
+}
+
+unsafe fn joints_2d() {
+    let world = fr2_world_create(0.0, -9.81);
+    let link = collider_2d(0, [0.4, 0.1], 0.0, 0.0, &[]);
+    let mut links = Vec::new();
+    for index in 0..5u32 {
+        links.push(fr2_body_create(world, 0, 0.5 + index as f32, 10.0, 0.0, 1.0, 0, 1.0, 0.0, 0.0, false, &link, 1));
+    }
+
+    let mut hinge = joint_2d(1, [-0.5, 0.0], [0.0, 10.0]);
+    hinge.limit = limit(-1.2, 1.2);
+    hinge.motor = velocity_motor(0.5);
+    let hinge_id = fr2_joint_create(world, links[0], 0, &hinge);
+    let mut slider = joint_2d(2, [0.5, 0.0], [-0.5, 0.0]);
+    slider.limit = limit(-0.2, 0.2);
+    slider.motor = position_motor(0.1);
+    fr2_joint_create(world, links[0], links[1], &slider);
+    let mut weld = joint_2d(0, [0.5, 0.0], [-0.5, 0.0]);
+    weld.softness = FrJointSoftness { frequency: 10.0, damping_ratio: 1.0 };
+    fr2_joint_create(world, links[1], links[2], &weld);
+    let mut rope = joint_2d(4, [0.5, 0.0], [-0.5, 0.0]);
+    rope.length = 1.5;
+    let rope_id = fr2_joint_create(world, links[2], links[3], &rope);
+    let mut spring = joint_2d(5, [0.5, 0.0], [-0.5, 0.0]);
+    spring.length = 1.0;
+    spring.stiffness = 30.0;
+    spring.damping = 2.0;
+    fr2_joint_create(world, links[3], links[4], &spring);
+
+    let mut saved = Vec::new();
+    let mut late = 0;
+    let mut at_snapshot = 0;
+    for tick in 1..=JOINT_STEPS {
+        if tick == JOINT_SNAPSHOT_AT + 1 {
+            let mut tether = joint_2d(4, [0.5, 0.0], [7.0, 12.0]);
+            tether.length = 3.0;
+            late = fr2_joint_create(world, links[4], 0, &tether);
+        }
+
+        if tick == JOINT_RETUNE_AT {
+            hinge.motor = velocity_motor(-1.0);
+            assert!(fr2_joint_set(world, hinge_id, &hinge));
+        }
+
+        fr2_world_step(world, SECONDS);
+        if tick == JOINT_SNAPSHOT_AT {
+            at_snapshot = fr2_world_hash(world);
+            saved = snapshot_2d(world);
+        }
+    }
+
+    let at_end = fr2_world_hash(world);
+    println!("2d joints {:016x} {:016x}", at_snapshot, at_end);
+    assert!(fr2_world_load(world, saved.as_ptr(), saved.len() as u32));
+    for tick in JOINT_SNAPSHOT_AT + 1..=JOINT_STEPS {
+        if tick == JOINT_RETUNE_AT {
+            assert!(fr2_joint_set(world, hinge_id, &hinge));
+        }
+
+        fr2_world_step(world, SECONDS);
+    }
+
+    println!("2d joints replay {}", fr2_world_hash(world) == at_end);
+    assert!(fr2_joint_remove(world, rope_id));
+    assert!(fr2_world_load(world, saved.as_ptr(), saved.len() as u32));
+    println!("2d joints load {} {}", fr2_joint_contains(world, late), fr2_joint_contains(world, rope_id));
     fr2_world_destroy(world);
 }
 

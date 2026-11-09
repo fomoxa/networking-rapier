@@ -195,6 +195,33 @@ namespace Fomoxa.Networking.Rapier.Tests
         }
 
         [Test]
+        public void AJointOfAnEntityNeedsOneOfItsBodiesAndGoesAwayWithThem()
+        {
+            using (var scenes = new RapierScenes())
+            {
+                StandaloneEntity entity = Entity();
+                PhysicsBody root = scenes.AddBody(entity, ArenaSceneId, Ball(new Vector3(0f, 5f, 0f)));
+                PhysicsBody limb = scenes.AddBody(entity, ArenaSceneId, Ball(new Vector3(2f, 5f, 0f)));
+                PhysicsBody stranger = scenes.AddBody(Entity(), ArenaSceneId, Ball(new Vector3(6f, 5f, 0f)));
+                RapierWorld world = scenes.WorldOf(ArenaSceneId);
+
+                JointHandle joint = scenes.CreateJoint(entity, root, limb, JointDesc.Rope(Vector3.Zero, Vector3.Zero, 2f));
+                JointHandle anchored = scenes.CreateJoint(entity, root, default, JointDesc.Rope(Vector3.Zero, new Vector3(0f, 6f, 0f), 1f));
+                Run(scenes, 60);
+                float fromAnchor = Vector3.Distance(root.Position, new Vector3(0f, 6f, 0f));
+                float fromLimb = Vector3.Distance(root.Position, limb.Position);
+                scenes.RemoveBodies(entity);
+
+                Assert.LessOrEqual(fromAnchor, 1.01f);
+                Assert.LessOrEqual(fromLimb, 2.01f);
+                Assert.Throws<ArgumentException>(() => scenes.CreateJoint(entity, stranger, root, JointDesc.Rope(Vector3.Zero, Vector3.Zero, 1f)));
+                Assert.Throws<ArgumentException>(() => scenes.CreateJoint(entity, default(PhysicsBody2D), default, JointDesc2D.Rope(Vector2.Zero, Vector2.Zero, 1f)));
+                Assert.IsFalse(world.Contains(joint));
+                Assert.IsFalse(world.Contains(anchored));
+            }
+        }
+
+        [Test]
         public void BrokenGeometryAsksForANewExport()
         {
             using (var scenes = new RapierScenes())

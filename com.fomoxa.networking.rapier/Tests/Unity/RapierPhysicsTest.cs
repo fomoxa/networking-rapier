@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using BundleFixture;
 using Fomoxa.Networking;
 using Fomoxa.Networking.Messaging;
@@ -12,6 +13,7 @@ using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using UnityEngine.TestTools;
 
 namespace Fomoxa.Unity.Rapier.Tests
 {
@@ -22,6 +24,7 @@ namespace Fomoxa.Unity.Rapier.Tests
         private const uint GroundPrefabId = 0x6400;
         private const uint ScaledBallPrefabId = 0xBA12;
         private const uint RagdollPrefabId = 0xBA13;
+        private const uint ChainPrefabId = 0xBA14;
         private const uint ArenaSceneId = 0x77;
 
         private readonly List<GameObject> created = new List<GameObject>();
@@ -350,6 +353,76 @@ namespace Fomoxa.Unity.Rapier.Tests
             Assert.IsTrue(bodies[1].IsKinematic);
             Assert.IsFalse(bodies[2].IsKinematic);
             Assert.Less(onClient.transform.Find("Free").position.y, 3.5f);
+        }
+
+        [Test]
+        public void JointsOfAPrefabAreBuiltAtSpawnAndJointsRapierCannotBuildAreReported()
+        {
+            var outside = new GameObject("Outside body");
+            created.Add(outside);
+            Rigidbody stranger = outside.AddComponent<Rigidbody>();
+            NetworkObject chainPrefab = Prefab("Chain", ChainPrefabId, chain =>
+            {
+                chain.AddComponent<SphereCollider>().radius = 0.25f;
+                Rigidbody root = chain.AddComponent<Rigidbody>();
+                chain.AddComponent<HingeJoint>().axis = Vector3.forward;
+                var link = Limb(chain.transform, "Link", new Vector3(1f, 0f, 0f)).AddComponent<HingeJoint>();
+                link.connectedBody = root;
+                link.anchor = new Vector3(-0.5f, 0f, 0f);
+                link.axis = Vector3.forward;
+                Limb(chain.transform, "Loose", new Vector3(-1f, 0f, 0f)).AddComponent<ConfigurableJoint>().connectedBody = root;
+                Limb(chain.transform, "Outside", new Vector3(0f, 0f, 1f)).AddComponent<FixedJoint>().connectedBody = stranger;
+                var breakable = Limb(chain.transform, "Breakable", new Vector3(0f, 0f, -1f)).AddComponent<FixedJoint>();
+                breakable.connectedBody = root;
+                breakable.breakForce = 50f;
+            });
+            NetworkManager server = Manager(chainPrefab);
+            server.ServerManager.StartConnection(1);
+            LogAssert.Expect(LogType.Error, new Regex("^ConfigurableJoint on Loose is not supported under Rapier"));
+            LogAssert.Expect(LogType.Error, new Regex("^FixedJoint on Outside: the connected body is not a body of the same NetworkObject"));
+            LogAssert.Expect(LogType.Error, new Regex("^FixedJoint on Breakable: Rapier joints do not break"));
+            NetworkObject chained = Spawn(server, chainPrefab, new Vector3(0f, 5f, 0f));
+
+            RunFrames(120);
+
+            Transform link = chained.transform.Find("Link");
+            Transform breakableLimb = chained.transform.Find("Breakable");
+            Assert.Less(Vector3.Distance(new Vector3(0f, 5f, 0f), chained.transform.position), 0.01f);
+            Assert.Less(Vector3.Distance(link.TransformPoint(new Vector3(-0.5f, 0f, 0f)), chained.transform.TransformPoint(new Vector3(0.5f, 0f, 0f))), 0.02f);
+            Assert.Less(link.position.y, 4.9f);
+            Assert.Less(Vector3.Distance(chained.transform.TransformPoint(new Vector3(0f, 0f, -1f)), breakableLimb.position), 0.02f);
+            Assert.Less(chained.transform.Find("Loose").position.y, 0f);
+        }
+
+        [Test]
+        public void AClientSimulatesAJointedLimbWithoutANetworkTransformAgainstItsProxyRoot()
+        {
+            NetworkObject chainPrefab = Prefab("Chain", ChainPrefabId, chain =>
+            {
+                chain.AddComponent<SphereCollider>().radius = 0.25f;
+                Rigidbody root = chain.AddComponent<Rigidbody>();
+                chain.AddComponent<NetworkTransform>();
+                chain.AddComponent<HingeJoint>().axis = Vector3.forward;
+                var link = Limb(chain.transform, "Link", new Vector3(1f, 0f, 0f)).AddComponent<HingeJoint>();
+                link.connectedBody = root;
+                link.anchor = new Vector3(-0.5f, 0f, 0f);
+                link.axis = Vector3.forward;
+            });
+            NetworkManager server = Manager(chainPrefab);
+            NetworkManager client = Manager(chainPrefab);
+            server.ServerManager.StartConnection(1);
+            client.ClientManager.StartConnection("unused.invalid", 1);
+            RunFrames(30);
+            NetworkObject chained = Spawn(server, chainPrefab, new Vector3(0f, 5f, 0f));
+
+            RunFrames(120);
+
+            var onClient = (NetworkObject)client.ClientManager.Spawned[chained.ObjectId];
+            Transform link = onClient.transform.Find("Link");
+            Assert.IsTrue(onClient.Body.IsKinematic);
+            Assert.IsFalse(onClient.Bodies[1].IsKinematic);
+            Assert.Less(Vector3.Distance(link.TransformPoint(new Vector3(-0.5f, 0f, 0f)), onClient.transform.TransformPoint(new Vector3(0.5f, 0f, 0f))), 0.02f);
+            Assert.Less(link.position.y, 4.9f);
         }
 
         [Test]

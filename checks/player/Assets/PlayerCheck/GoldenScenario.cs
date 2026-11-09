@@ -15,6 +15,9 @@ namespace Fomoxa.Rapier.PlayerCheck
         private const float Seconds = 1f / 30f;
         private const int ForceSteps = 60;
         private const int CcdSteps = 3;
+        private const int JointSteps = 120;
+        private const int JointSnapshotAt = 60;
+        private const int JointRetuneAt = 70;
 
         private static readonly ColliderMaterial Material = new ColliderMaterial(0.6f, 0.1f, CombineRule.Average, CombineRule.Average);
         private static readonly Quaternion Turned = new Quaternion(0.6f, 0f, 0f, 0.8f);
@@ -23,7 +26,9 @@ namespace Fomoxa.Rapier.PlayerCheck
         {
             var lines = new List<string>();
             Run3D(lines);
+            Joints3D(lines);
             Run2D(lines);
+            Joints2D(lines);
             return lines;
         }
 
@@ -212,6 +217,144 @@ namespace Fomoxa.Rapier.PlayerCheck
 
             lines.Add($"2d forces {world.StateHash:x16}");
         }
+
+        private static void Joints3D(List<string> lines)
+        {
+            using (var world = new RapierWorld(new Vector3(0f, -9.81f, 0f)))
+            {
+                var motion = new BodyMotion(BodyLocks.None, true, 0f, 0f);
+                var links = new BodyHandle[6];
+                for (int index = 0; index < links.Length; index++)
+                {
+                    links[index] = world.CreateBody(new BodyDesc(BodyKind.Dynamic, new[] { Collider(BodyShape.Box(new Vector3(0.4f, 0.1f, 0.1f))) }, new Vector3(0.5f + index, 10f, 0f), Quaternion.Identity, 1f, motion));
+                }
+
+                var alongZ = new Quaternion(0f, -0.70710677f, 0f, 0.70710677f);
+                JointDesc hinge = new JointDesc(JointKind.Revolute, new Vector3(-0.5f, 0f, 0f), alongZ, new Vector3(0f, 10f, 0f), alongZ)
+                    .WithLimit(new JointLimit(-1.2f, 1.2f))
+                    .WithMotor(VelocityMotor(0.5f));
+                JointHandle hingeJoint = world.CreateJoint(links[0], default, hinge);
+                world.CreateJoint(links[0], links[1], Linked(JointKind.Spherical).WithLimit(new JointLimit(-0.3f, 0.3f)).WithSwingLimits(new JointLimit(-0.6f, 0.6f), new JointLimit(-0.6f, 0.6f)));
+                world.CreateJoint(links[1], links[2], Linked(JointKind.Prismatic).WithLimit(new JointLimit(-0.2f, 0.2f)).WithMotor(PositionMotor(0.1f)));
+                world.CreateJoint(links[2], links[3], Linked(JointKind.Fixed).WithSoftness(new JointSoftness(10f, 1f)));
+                JointHandle rope = world.CreateJoint(links[3], links[4], JointDesc.Rope(new Vector3(0.5f, 0f, 0f), new Vector3(-0.5f, 0f, 0f), 1.5f));
+                world.CreateJoint(links[4], links[5], JointDesc.Spring(new Vector3(0.5f, 0f, 0f), new Vector3(-0.5f, 0f, 0f), 1f, 30f, 2f));
+
+                PhysicsSnapshot saved = world.CreateSnapshot();
+                JointHandle late = default;
+                ulong atSnapshot = 0;
+                for (int tick = 1; tick <= JointSteps; tick++)
+                {
+                    if (tick == JointSnapshotAt + 1)
+                    {
+                        late = world.CreateJoint(links[5], default, JointDesc.Rope(new Vector3(0.5f, 0f, 0f), new Vector3(8f, 12f, 0f), 3f));
+                    }
+
+                    if (tick == JointRetuneAt)
+                    {
+                        hinge = hinge.WithMotor(VelocityMotor(-1f));
+                        world.SetJoint(hingeJoint, hinge);
+                    }
+
+                    world.Step(Seconds);
+                    if (tick == JointSnapshotAt)
+                    {
+                        atSnapshot = world.StateHash;
+                        world.Save(saved);
+                    }
+                }
+
+                ulong atEnd = world.StateHash;
+                lines.Add($"3d joints {atSnapshot:x16} {atEnd:x16}");
+                world.Load(saved);
+                for (int tick = JointSnapshotAt + 1; tick <= JointSteps; tick++)
+                {
+                    if (tick == JointRetuneAt)
+                    {
+                        world.SetJoint(hingeJoint, hinge);
+                    }
+
+                    world.Step(Seconds);
+                }
+
+                lines.Add($"3d joints replay {Flag(world.StateHash == atEnd)}");
+                world.RemoveJoint(rope);
+                world.Load(saved);
+                lines.Add($"3d joints load {Flag(world.Contains(late))} {Flag(world.Contains(rope))}");
+            }
+        }
+
+        private static void Joints2D(List<string> lines)
+        {
+            using (var world = new RapierWorld2D(new Vector2(0f, -9.81f)))
+            {
+                var motion = new BodyMotion2D(BodyLocks2D.None, 1f, 0f, 0f);
+                var links = new BodyHandle[5];
+                for (int index = 0; index < links.Length; index++)
+                {
+                    links[index] = world.CreateBody(new BodyDesc2D(BodyKind.Dynamic, new[] { Collider(BodyShape2D.Box(new Vector2(0.4f, 0.1f))) }, new Vector2(0.5f + index, 10f), 0f, 1f, motion));
+                }
+
+                JointDesc2D hinge = new JointDesc2D(JointKind.Revolute, new Vector2(-0.5f, 0f), 0f, new Vector2(0f, 10f), 0f)
+                    .WithLimit(new JointLimit(-1.2f, 1.2f))
+                    .WithMotor(VelocityMotor(0.5f));
+                JointHandle hingeJoint = world.CreateJoint(links[0], default, hinge);
+                world.CreateJoint(links[0], links[1], Linked2D(JointKind.Prismatic).WithLimit(new JointLimit(-0.2f, 0.2f)).WithMotor(PositionMotor(0.1f)));
+                world.CreateJoint(links[1], links[2], Linked2D(JointKind.Fixed).WithSoftness(new JointSoftness(10f, 1f)));
+                JointHandle rope = world.CreateJoint(links[2], links[3], JointDesc2D.Rope(new Vector2(0.5f, 0f), new Vector2(-0.5f, 0f), 1.5f));
+                world.CreateJoint(links[3], links[4], JointDesc2D.Spring(new Vector2(0.5f, 0f), new Vector2(-0.5f, 0f), 1f, 30f, 2f));
+
+                PhysicsSnapshot saved = world.CreateSnapshot();
+                JointHandle late = default;
+                ulong atSnapshot = 0;
+                for (int tick = 1; tick <= JointSteps; tick++)
+                {
+                    if (tick == JointSnapshotAt + 1)
+                    {
+                        late = world.CreateJoint(links[4], default, JointDesc2D.Rope(new Vector2(0.5f, 0f), new Vector2(7f, 12f), 3f));
+                    }
+
+                    if (tick == JointRetuneAt)
+                    {
+                        hinge = hinge.WithMotor(VelocityMotor(-1f));
+                        world.SetJoint(hingeJoint, hinge);
+                    }
+
+                    world.Step(Seconds);
+                    if (tick == JointSnapshotAt)
+                    {
+                        atSnapshot = world.StateHash;
+                        world.Save(saved);
+                    }
+                }
+
+                ulong atEnd = world.StateHash;
+                lines.Add($"2d joints {atSnapshot:x16} {atEnd:x16}");
+                world.Load(saved);
+                for (int tick = JointSnapshotAt + 1; tick <= JointSteps; tick++)
+                {
+                    if (tick == JointRetuneAt)
+                    {
+                        world.SetJoint(hingeJoint, hinge);
+                    }
+
+                    world.Step(Seconds);
+                }
+
+                lines.Add($"2d joints replay {Flag(world.StateHash == atEnd)}");
+                world.RemoveJoint(rope);
+                world.Load(saved);
+                lines.Add($"2d joints load {Flag(world.Contains(late))} {Flag(world.Contains(rope))}");
+            }
+        }
+
+        private static JointDesc Linked(JointKind kind) => new JointDesc(kind, new Vector3(0.5f, 0f, 0f), Quaternion.Identity, new Vector3(-0.5f, 0f, 0f), Quaternion.Identity);
+
+        private static JointDesc2D Linked2D(JointKind kind) => new JointDesc2D(kind, new Vector2(0.5f, 0f), 0f, new Vector2(-0.5f, 0f), 0f);
+
+        private static JointMotorDesc VelocityMotor(float targetVelocity) => JointMotorDesc.Velocity(targetVelocity, 50f, 20f);
+
+        private static JointMotorDesc PositionMotor(float targetPosition) => JointMotorDesc.Position(targetPosition, 40f, 4f, 100f);
 
         private static void Ccd3D(RapierWorld world, List<string> lines)
         {

@@ -27,6 +27,9 @@ namespace Fomoxa.Unity.Rapier
         private readonly List<IPhysicsSimulation> inner = new List<IPhysicsSimulation>();
         private readonly List<Rigidbody> treeBodies = new List<Rigidbody>();
         private readonly List<Rigidbody2D> treeBodies2D = new List<Rigidbody2D>();
+        private readonly List<Joint> partJoints = new List<Joint>();
+        private readonly List<Joint2D> partJoints2D = new List<Joint2D>();
+        private readonly List<string> ignored = new List<string>();
         private NetworkManager manager;
         private RapierScenes scenes;
         private RapierContacts contacts;
@@ -533,6 +536,8 @@ namespace Fomoxa.Unity.Rapier
                         AddPart2D(networkObject, found, sceneId, rigidbody.gameObject);
                     }
                 }
+
+                AddJoints(networkObject, found);
             }
             catch (Exception exception) when (exception is NotSupportedException || exception is ArgumentException)
             {
@@ -596,6 +601,105 @@ namespace Fomoxa.Unity.Rapier
             found.Parts.Add(part);
             found.Bodies2D.Add(part.Body2D);
             contacts.AddBody2D(networkObject, found.World2D, part.Body2D.Handle, sources);
+        }
+
+        private void AddJoints(NetworkObject networkObject, Bound found)
+        {
+            foreach (BoundPart part in found.Parts)
+            {
+                if (part.Body.IsValid)
+                {
+                    part.Transform.GetComponents(partJoints);
+                    foreach (Joint joint in partJoints)
+                    {
+                        AddJoint(networkObject, found, part, joint);
+                    }
+                }
+                else if (part.Body2D.IsValid)
+                {
+                    part.Transform.GetComponents(partJoints2D);
+                    foreach (Joint2D joint in partJoints2D)
+                    {
+                        AddJoint2D(networkObject, found, part, joint);
+                    }
+                }
+            }
+
+            partJoints.Clear();
+            partJoints2D.Clear();
+        }
+
+        private void AddJoint(NetworkObject networkObject, Bound found, BoundPart part, Joint joint)
+        {
+            BoundPart connected = null;
+            if (joint.connectedBody != null || joint.connectedArticulationBody != null)
+            {
+                connected = found.Parts.Find(other => other.Body.IsValid && other.Rigidbody != null && other.Rigidbody == joint.connectedBody);
+                if (connected == null)
+                {
+                    Debug.LogError($"{joint.GetType().Name} on {joint.name}: the connected body is not a body of the same NetworkObject, so Rapier does not build this joint", joint);
+                    return;
+                }
+            }
+
+            ignored.Clear();
+            if (!RapierJoints.TryDescribe(joint, connected?.Transform, ignored, out JointDesc desc))
+            {
+                Debug.LogError($"{joint.GetType().Name} on {joint.name} is not supported under Rapier, so the joint is not built", joint);
+                return;
+            }
+
+            Report(joint, RapierJoints.Breaks(joint));
+            Create(joint, () => scenes.CreateJoint(networkObject, part.Body, connected?.Body ?? default, desc));
+        }
+
+        private void AddJoint2D(NetworkObject networkObject, Bound found, BoundPart part, Joint2D joint)
+        {
+            BoundPart connected = null;
+            if (joint.connectedBody != null)
+            {
+                connected = found.Parts.Find(other => other.Body2D.IsValid && other.Rigidbody2D != null && other.Rigidbody2D == joint.connectedBody);
+                if (connected == null)
+                {
+                    Debug.LogError($"{joint.GetType().Name} on {joint.name}: the connected body is not a body of the same NetworkObject, so Rapier does not build this joint", joint);
+                    return;
+                }
+            }
+
+            ignored.Clear();
+            if (!RapierJoints.TryDescribe2D(joint, connected?.Transform, ignored, out JointDesc2D desc))
+            {
+                Debug.LogError($"{joint.GetType().Name} on {joint.name} is not supported under Rapier, so the joint is not built", joint);
+                return;
+            }
+
+            Report(joint, RapierJoints.Breaks(joint));
+            Create(joint, () => scenes.CreateJoint(networkObject, part.Body2D, connected?.Body2D ?? default, desc));
+        }
+
+        private static void Create(Component joint, Func<JointHandle> create)
+        {
+            try
+            {
+                create();
+            }
+            catch (ArgumentException exception)
+            {
+                Debug.LogException(exception, joint);
+            }
+        }
+
+        private void Report(Component joint, bool breaks)
+        {
+            if (breaks)
+            {
+                Debug.LogError($"{joint.GetType().Name} on {joint.name}: Rapier joints do not break, so breakForce and breakTorque are ignored", joint);
+            }
+
+            if (ignored.Count > 0)
+            {
+                Debug.LogWarning($"{joint.GetType().Name} on {joint.name}: Rapier ignores {string.Join(", ", ignored)}", joint);
+            }
         }
 
         private static bool ActiveInTree(Transform node, Transform root)

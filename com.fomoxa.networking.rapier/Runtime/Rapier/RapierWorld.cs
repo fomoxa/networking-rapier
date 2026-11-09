@@ -118,6 +118,29 @@ namespace Fomoxa.Networking.Rapier
 
         public bool Contains(BodyHandle body) => body.IsValid && RapierNative.fr_body_contains(world, (uint)body.Value);
 
+        public JointHandle CreateJoint(BodyHandle a, BodyHandle b, in JointDesc desc)
+        {
+            uint id = RapierNative.fr_joint_create(world, Id(a), Id(b), RapierNative.Joint.Of(desc));
+            if (id == 0)
+            {
+                throw new ArgumentException("Rapier refused the joint (body a missing, b missing or equal to a, an unknown kind, a rope without a positive length, or a disposed world)", nameof(desc));
+            }
+
+            return new JointHandle((int)id);
+        }
+
+        public bool RemoveJoint(JointHandle joint) => joint.IsValid && RapierNative.fr_joint_remove(world, (uint)joint.Value);
+
+        public bool Contains(JointHandle joint) => joint.IsValid && RapierNative.fr_joint_contains(world, (uint)joint.Value);
+
+        public void SetJoint(JointHandle joint, in JointDesc desc)
+        {
+            if (!joint.IsValid || !RapierNative.fr_joint_set(world, (uint)joint.Value, RapierNative.Joint.Of(desc)))
+            {
+                throw new ArgumentException($"joint {joint.Value} is not in this world, or Rapier refused the description", nameof(joint));
+            }
+        }
+
         public BodyState GetBody(BodyHandle body)
         {
             if (!RapierNative.fr_body_get(world, Id(body), out RapierNative.BodyState state))

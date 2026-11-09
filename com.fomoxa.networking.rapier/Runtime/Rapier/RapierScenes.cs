@@ -250,6 +250,12 @@ namespace Fomoxa.Networking.Rapier
             return new PhysicsBody2D(world, handle);
         }
 
+        public JointHandle CreateJoint(INetworkEntity owner, PhysicsBody a, PhysicsBody b, in JointDesc desc) =>
+            ((RapierWorld)OwnerWorld(owner, a.Handle, false)).CreateJoint(a.Handle, b.Handle, desc);
+
+        public JointHandle CreateJoint(INetworkEntity owner, PhysicsBody2D a, PhysicsBody2D b, in JointDesc2D desc) =>
+            ((RapierWorld2D)OwnerWorld(owner, a.Handle, true)).CreateJoint(a.Handle, b.Handle, desc);
+
         public void RemoveBodies(INetworkEntity entity)
         {
             if (entity == null || !bodies.Remove(entity, out List<Part> parts))
@@ -394,6 +400,22 @@ namespace Fomoxa.Networking.Rapier
             unowned.Clear();
             unowned2D.Clear();
             released.Clear();
+        }
+
+        private IRapierBodies OwnerWorld(INetworkEntity owner, BodyHandle body, bool is2D)
+        {
+            if (owner != null && bodies.TryGetValue(owner, out List<Part> parts))
+            {
+                foreach (Part part in parts)
+                {
+                    if ((part.World is IPhysicsWorld2D) == is2D && part.Handle.Equals(body))
+                    {
+                        return part.World;
+                    }
+                }
+            }
+
+            throw new ArgumentException($"body {body.Value} is not a {(is2D ? "2D " : string.Empty)}body of the owner", nameof(body));
         }
 
         private void PlaceProxy(INetworkEntity entity, BodyHandle handle, bool is2D)
