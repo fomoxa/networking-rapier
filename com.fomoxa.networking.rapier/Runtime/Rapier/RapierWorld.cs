@@ -262,6 +262,26 @@ namespace Fomoxa.Networking.Rapier
             }
         }
 
+        public CharacterMove MoveCharacter(BodyHandle body, Vector3 desired, float seconds, in CharacterSettings settings) =>
+            MoveCharacter(body, desired, seconds, settings, QueryFilter.All);
+
+        public CharacterMove MoveCharacter(BodyHandle body, Vector3 desired, float seconds, in CharacterSettings settings, in QueryFilter filter)
+        {
+            if (float.IsNaN(seconds) || float.IsInfinity(seconds) || seconds < 0f)
+            {
+                throw new ArgumentException("seconds must be finite and not negative", nameof(seconds));
+            }
+
+            RapierNative.CharacterSettings native = RapierNative.CharacterSettings.Of(settings);
+            RapierNative.QueryFilter nativeFilter = RapierNative.QueryFilter.Of(filter);
+            if (!RapierNative.fr_character_move(world, Id(body), desired, seconds, native, nativeFilter, out RapierNative.CharacterMove moved))
+            {
+                throw new ArgumentException($"body {body.Value} is not a kinematic body of this world with exactly one non-trigger box, sphere or capsule collider, or the move is not finite", nameof(body));
+            }
+
+            return new CharacterMove(moved.Moved, moved.Grounded != 0, moved.Sliding != 0);
+        }
+
         public bool Raycast(Vector3 origin, Vector3 direction, float maxDistance, in QueryFilter filter, out RayHit hit)
         {
             RapierNative.QueryFilter native = RapierNative.QueryFilter.Of(filter);

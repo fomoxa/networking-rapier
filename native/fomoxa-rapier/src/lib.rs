@@ -1,3 +1,4 @@
+mod character;
 mod contact;
 mod hash;
 mod joint;
@@ -6,6 +7,7 @@ mod query;
 mod world2d;
 mod world3d;
 
+pub use character::{FrCharacterAutostep, FrCharacterLength};
 pub use contact::FrColliderRef;
 pub use joint::{FrJointLimit, FrJointMotor, FrJointSoftness};
 pub use query::FrQueryFilter;

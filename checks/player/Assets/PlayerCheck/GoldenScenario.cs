@@ -18,6 +18,10 @@ namespace Fomoxa.Rapier.PlayerCheck
         private const int JointSteps = 120;
         private const int JointSnapshotAt = 60;
         private const int JointRetuneAt = 70;
+        private const int CharacterSteps = 120;
+        private const int CharacterSnapshotAt = 60;
+        private const int CharacterLayer = 1;
+        private const int SkippedLayer = 2;
 
         private static readonly ColliderMaterial Material = new ColliderMaterial(0.6f, 0.1f, CombineRule.Average, CombineRule.Average);
         private static readonly Quaternion Turned = new Quaternion(0.6f, 0f, 0f, 0.8f);
@@ -27,8 +31,10 @@ namespace Fomoxa.Rapier.PlayerCheck
             var lines = new List<string>();
             Run3D(lines);
             Joints3D(lines);
+            Character3D(lines);
             Run2D(lines);
             Joints2D(lines);
+            Character2D(lines);
             return lines;
         }
 
@@ -347,6 +353,143 @@ namespace Fomoxa.Rapier.PlayerCheck
                 lines.Add($"2d joints load {Flag(world.Contains(late))} {Flag(world.Contains(rope))}");
             }
         }
+
+        private static void Character3D(List<string> lines)
+        {
+            using (var world = new RapierWorld(new Vector3(0f, -9.81f, 0f)))
+            {
+                world.SetLayerCollisions(CharacterLayers());
+                world.AddStatic(new[] { Placed(BodyShape.Box(new Vector3(20f, 0.5f, 5f)), new Vector3(8f, -0.5f, 0f), 0, false) });
+                world.AddStatic(new[] { Placed(BodyShape.Box(new Vector3(0.3f, 1f, 1f)), new Vector3(2f, 1f, 0f), 0, true) });
+                world.AddStatic(new[] { Placed(BodyShape.Box(new Vector3(1f, 0.15f, 2f)), new Vector3(4f, 0.15f, 0f), 0, false) });
+                world.AddStatic(new[] { Placed(BodyShape.Box(new Vector3(0.1f, 1.5f, 2f)), new Vector3(9f, 1.5f, 0f), SkippedLayer, false) });
+
+                var motion = new BodyMotion(BodyLocks.None, true, 0f, 0f);
+                BodyHandle character = world.CreateBody(new BodyDesc(BodyKind.Kinematic, new[] { Placed(BodyShape.Capsule(0.3f, 0.5f), Vector3.Zero, CharacterLayer, false) }, new Vector3(0f, 0.81f, 0f), Quaternion.Identity, 1f, motion));
+                BodyHandle gate = world.CreateBody(new BodyDesc(BodyKind.Kinematic, new[] { Collider(BodyShape.Box(new Vector3(0.1f, 1f, 1f))) }, new Vector3(0f, 1f, 10f), Quaternion.Identity, 1f, motion));
+                world.CreateBody(new BodyDesc(BodyKind.Dynamic, new[] { Collider(BodyShape.Box(new Vector3(0.3f, 0.3f, 0.3f))) }, new Vector3(10.5f, 0.3f, 0f), Quaternion.Identity, 1f, motion));
+
+                PhysicsSnapshot saved = world.CreateSnapshot();
+                ulong atSnapshot = 0;
+                int grounded = 0;
+                for (int tick = 1; tick <= CharacterSteps; tick++)
+                {
+                    grounded += CharacterTick3D(world, character, gate, tick);
+                    if (tick == CharacterSnapshotAt)
+                    {
+                        atSnapshot = world.StateHash;
+                        world.Save(saved);
+                    }
+                }
+
+                ulong atEnd = world.StateHash;
+                lines.Add($"3d character {atSnapshot:x16} {atEnd:x16} {Bits(world.GetBody(character).Position.X)} {grounded}");
+                world.Load(saved);
+                for (int tick = CharacterSnapshotAt + 1; tick <= CharacterSteps; tick++)
+                {
+                    CharacterTick3D(world, character, gate, tick);
+                }
+
+                lines.Add($"3d character replay {Flag(world.StateHash == atEnd)}");
+            }
+        }
+
+        private static void Character2D(List<string> lines)
+        {
+            using (var world = new RapierWorld2D(new Vector2(0f, -9.81f)))
+            {
+                world.SetLayerCollisions(CharacterLayers());
+                world.AddStatic(new[] { Placed(BodyShape2D.Box(new Vector2(20f, 0.5f)), new Vector2(8f, -0.5f), 0, false) });
+                world.AddStatic(new[] { Placed(BodyShape2D.Box(new Vector2(0.3f, 1f)), new Vector2(2f, 1f), 0, true) });
+                world.AddStatic(new[] { Placed(BodyShape2D.Box(new Vector2(1f, 0.15f)), new Vector2(4f, 0.15f), 0, false) });
+                world.AddStatic(new[] { Placed(BodyShape2D.Box(new Vector2(0.1f, 1.5f)), new Vector2(9f, 1.5f), SkippedLayer, false) });
+
+                var motion = new BodyMotion2D(BodyLocks2D.None, 1f, 0f, 0f);
+                BodyHandle character = world.CreateBody(new BodyDesc2D(BodyKind.Kinematic, new[] { Placed(BodyShape2D.Capsule(0.3f, 0.5f), Vector2.Zero, CharacterLayer, false) }, new Vector2(0f, 0.81f), 0f, 1f, motion));
+                BodyHandle gate = world.CreateBody(new BodyDesc2D(BodyKind.Kinematic, new[] { Collider(BodyShape2D.Box(new Vector2(0.1f, 1f))) }, new Vector2(0f, 10f), 0f, 1f, motion));
+                world.CreateBody(new BodyDesc2D(BodyKind.Dynamic, new[] { Collider(BodyShape2D.Box(new Vector2(0.3f, 0.3f))) }, new Vector2(10.5f, 0.3f), 0f, 1f, motion));
+
+                PhysicsSnapshot saved = world.CreateSnapshot();
+                ulong atSnapshot = 0;
+                int grounded = 0;
+                for (int tick = 1; tick <= CharacterSteps; tick++)
+                {
+                    grounded += CharacterTick2D(world, character, gate, tick);
+                    if (tick == CharacterSnapshotAt)
+                    {
+                        atSnapshot = world.StateHash;
+                        world.Save(saved);
+                    }
+                }
+
+                ulong atEnd = world.StateHash;
+                lines.Add($"2d character {atSnapshot:x16} {atEnd:x16} {Bits(world.GetBody(character).Position.X)} {grounded}");
+                world.Load(saved);
+                for (int tick = CharacterSnapshotAt + 1; tick <= CharacterSteps; tick++)
+                {
+                    CharacterTick2D(world, character, gate, tick);
+                }
+
+                lines.Add($"2d character replay {Flag(world.StateHash == atEnd)}");
+            }
+        }
+
+        private static int CharacterTick3D(RapierWorld world, BodyHandle character, BodyHandle gate, int tick)
+        {
+            if (tick >= 40 && tick <= 50)
+            {
+                float x = world.GetBody(character).Position.X;
+                world.SetBody(gate, new BodyState { Position = new Vector3(x + 0.7f, 1f, 0f), Rotation = Quaternion.Identity });
+            }
+            else if (tick == 51)
+            {
+                world.SetBody(gate, new BodyState { Position = new Vector3(0f, 1f, 10f), Rotation = Quaternion.Identity });
+            }
+
+            CharacterMove move = world.MoveCharacter(character, new Vector3(0.1f, -0.02f, 0f), Seconds, CharacterSettings3D());
+            world.Step(Seconds);
+            return move.Grounded ? 1 : 0;
+        }
+
+        private static int CharacterTick2D(RapierWorld2D world, BodyHandle character, BodyHandle gate, int tick)
+        {
+            if (tick >= 40 && tick <= 50)
+            {
+                float x = world.GetBody(character).Position.X;
+                world.SetBody(gate, new BodyState2D { Position = new Vector2(x + 0.7f, 1f) });
+            }
+            else if (tick == 51)
+            {
+                world.SetBody(gate, new BodyState2D { Position = new Vector2(0f, 10f) });
+            }
+
+            CharacterMove2D move = world.MoveCharacter(character, new Vector2(0.1f, -0.02f), Seconds, CharacterSettings2DOf());
+            world.Step(Seconds);
+            return move.Grounded ? 1 : 0;
+        }
+
+        private static CharacterAutostep Autostep() => new CharacterAutostep(CharacterLength.Relative(0.25f), CharacterLength.Relative(0.5f), false);
+
+        private static CharacterSettings CharacterSettings3D() => CharacterSettings.Default.WithAutostep(Autostep()).WithPushMass(2f);
+
+        private static CharacterSettings2D CharacterSettings2DOf() => CharacterSettings2D.Default.WithAutostep(Autostep()).WithPushMass(2f);
+
+        private static uint[] CharacterLayers()
+        {
+            var layers = new uint[32];
+            for (int layer = 0; layer < layers.Length; layer++)
+            {
+                layers[layer] = uint.MaxValue;
+            }
+
+            layers[CharacterLayer] = ~(1u << SkippedLayer);
+            layers[SkippedLayer] = ~(1u << CharacterLayer);
+            return layers;
+        }
+
+        private static ColliderDesc Placed(BodyShape shape, Vector3 position, int layer, bool isTrigger) => new ColliderDesc(shape, position, Quaternion.Identity, Material, layer, isTrigger);
+
+        private static ColliderDesc2D Placed(BodyShape2D shape, Vector2 position, int layer, bool isTrigger) => new ColliderDesc2D(shape, position, 0f, Material, layer, isTrigger);
 
         private static JointDesc Linked(JointKind kind) => new JointDesc(kind, new Vector3(0.5f, 0f, 0f), Quaternion.Identity, new Vector3(-0.5f, 0f, 0f), Quaternion.Identity);
 

@@ -256,6 +256,18 @@ namespace Fomoxa.Networking.Rapier
         public JointHandle CreateJoint(INetworkEntity owner, PhysicsBody2D a, PhysicsBody2D b, in JointDesc2D desc) =>
             ((RapierWorld2D)OwnerWorld(owner, a.Handle, true)).CreateJoint(a.Handle, b.Handle, desc);
 
+        public CharacterMove MoveCharacter(INetworkEntity owner, PhysicsBody body, Vector3 desired, float seconds, in CharacterSettings settings) =>
+            MoveCharacter(owner, body, desired, seconds, settings, QueryFilter.All);
+
+        public CharacterMove MoveCharacter(INetworkEntity owner, PhysicsBody body, Vector3 desired, float seconds, in CharacterSettings settings, in QueryFilter filter) =>
+            ((RapierWorld)OwnerWorld(owner, body.Handle, false)).MoveCharacter(body.Handle, desired, seconds, settings, filter);
+
+        public CharacterMove2D MoveCharacter(INetworkEntity owner, PhysicsBody2D body, Vector2 desired, float seconds, in CharacterSettings2D settings) =>
+            MoveCharacter(owner, body, desired, seconds, settings, QueryFilter.All);
+
+        public CharacterMove2D MoveCharacter(INetworkEntity owner, PhysicsBody2D body, Vector2 desired, float seconds, in CharacterSettings2D settings, in QueryFilter filter) =>
+            ((RapierWorld2D)OwnerWorld(owner, body.Handle, true)).MoveCharacter(body.Handle, desired, seconds, settings, filter);
+
         public void RemoveBodies(INetworkEntity entity)
         {
             if (entity == null || !bodies.Remove(entity, out List<Part> parts))

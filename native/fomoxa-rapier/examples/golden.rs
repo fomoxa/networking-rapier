@@ -13,6 +13,10 @@ const CCD_STEPS: u32 = 3;
 const JOINT_STEPS: u32 = 120;
 const JOINT_SNAPSHOT_AT: u32 = 60;
 const JOINT_RETUNE_AT: u32 = 70;
+const CHARACTER_STEPS: u32 = 120;
+const CHARACTER_SNAPSHOT_AT: u32 = 60;
+const CHARACTER_LAYER: u32 = 1;
+const SKIPPED_LAYER: u32 = 2;
 const ALL: FrQueryFilter = FrQueryFilter { layer_mask: u32::MAX, exclude_body: 0, include_triggers: 1 };
 
 fn collider(shape: u32, half_extents: [f32; 3], radius: f32, half_height: f32, points: &[f32], triangles: &[u32]) -> FrCollider {
@@ -335,6 +339,104 @@ unsafe fn joints_3d() {
     fr_world_destroy(world);
 }
 
+fn length(value: f32) -> FrCharacterLength {
+    FrCharacterLength { value, relative: 1 }
+}
+
+fn autostep() -> FrCharacterAutostep {
+    FrCharacterAutostep { enabled: 1, max_height: length(0.25), min_width: length(0.5), include_dynamic_bodies: 0 }
+}
+
+fn character_layers() -> [u32; 32] {
+    let mut layers = [u32::MAX; 32];
+    layers[CHARACTER_LAYER as usize] = !(1 << SKIPPED_LAYER);
+    layers[SKIPPED_LAYER as usize] = !(1 << CHARACTER_LAYER);
+    layers
+}
+
+fn character_settings_3d() -> FrCharacterSettings {
+    FrCharacterSettings {
+        up: [0.0, 1.0, 0.0],
+        offset: length(0.01),
+        slide: 1,
+        autostep: autostep(),
+        max_slope_climb_angle: std::f32::consts::FRAC_PI_4,
+        min_slope_slide_angle: std::f32::consts::FRAC_PI_4,
+        snap_to_ground: 1,
+        snap_distance: length(0.2),
+        normal_nudge_factor: 1.0e-4,
+        push_mass: 2.0,
+    }
+}
+
+unsafe fn static_box_3d(world: *mut World, half_extents: [f32; 3], position: [f32; 3], layer: u32, is_trigger: bool) {
+    let mut shape = collider(0, half_extents, 0.0, 0.0, &[], &[]);
+    shape.position = position;
+    shape.layer = layer;
+    shape.is_trigger = is_trigger as u32;
+    let mut first = 0;
+    fr_world_add_static(world, &shape, 1, &mut first);
+}
+
+unsafe fn character_tick_3d(world: *mut World, character: u32, gate: u32, tick: u32) -> u32 {
+    if (40..=50).contains(&tick) {
+        let mut at = FrBodyState::default();
+        assert!(fr_body_get(world, character, &mut at));
+        let state = FrBodyState { position: [at.position[0] + 0.7, 1.0, 0.0], rotation: IDENTITY, ..Default::default() };
+        assert!(fr_body_set(world, gate, &state));
+    } else if tick == 51 {
+        let state = FrBodyState { position: [0.0, 1.0, 10.0], rotation: IDENTITY, ..Default::default() };
+        assert!(fr_body_set(world, gate, &state));
+    }
+
+    let desired = [0.1, -0.02, 0.0];
+    let mut moved = FrCharacterMove::default();
+    assert!(fr_character_move(world, character, desired.as_ptr(), SECONDS, &character_settings_3d(), &ALL, &mut moved));
+    fr_world_step(world, SECONDS);
+    moved.grounded
+}
+
+unsafe fn character_3d() {
+    let world = fr_world_create(0.0, -9.81, 0.0);
+    assert!(fr_world_set_layers(world, character_layers().as_ptr()));
+    static_box_3d(world, [20.0, 0.5, 5.0], [8.0, -0.5, 0.0], 0, false);
+    static_box_3d(world, [0.3, 1.0, 1.0], [2.0, 1.0, 0.0], 0, true);
+    static_box_3d(world, [1.0, 0.15, 2.0], [4.0, 0.15, 0.0], 0, false);
+    static_box_3d(world, [0.1, 1.5, 2.0], [9.0, 1.5, 0.0], SKIPPED_LAYER, false);
+
+    let mut capsule = collider(2, [0.0; 3], 0.3, 0.5, &[], &[]);
+    capsule.layer = CHARACTER_LAYER;
+    let start = [0.0, 0.81, 0.0];
+    let character = fr_body_create(world, 1, start.as_ptr(), IDENTITY.as_ptr(), 1.0, 0, 1.0, 0.0, 0.0, false, &capsule, 1);
+    let plate = collider(0, [0.1, 1.0, 1.0], 0.0, 0.0, &[], &[]);
+    let away = [0.0, 1.0, 10.0];
+    let gate = fr_body_create(world, 1, away.as_ptr(), IDENTITY.as_ptr(), 1.0, 0, 1.0, 0.0, 0.0, false, &plate, 1);
+    let crate_box = collider(0, [0.3, 0.3, 0.3], 0.0, 0.0, &[], &[]);
+    let crate_at = [10.5, 0.3, 0.0];
+    fr_body_create(world, 0, crate_at.as_ptr(), IDENTITY.as_ptr(), 1.0, 0, 1.0, 0.0, 0.0, false, &crate_box, 1);
+
+    let mut saved = Vec::new();
+    let mut at_snapshot = 0;
+    let mut grounded = 0;
+    for tick in 1..=CHARACTER_STEPS {
+        grounded += character_tick_3d(world, character, gate, tick);
+        if tick == CHARACTER_SNAPSHOT_AT {
+            at_snapshot = fr_world_hash(world);
+            saved = snapshot_3d(world);
+        }
+    }
+
+    let at_end = fr_world_hash(world);
+    println!("3d character {:016x} {:016x} {:08x} {}", at_snapshot, at_end, position_3d(world, character)[0].to_bits(), grounded);
+    assert!(fr_world_load(world, saved.as_ptr(), saved.len() as u32));
+    for tick in CHARACTER_SNAPSHOT_AT + 1..=CHARACTER_STEPS {
+        character_tick_3d(world, character, gate, tick);
+    }
+
+    println!("3d character replay {}", fr_world_hash(world) == at_end);
+    fr_world_destroy(world);
+}
+
 unsafe fn run_3d() {
     let world = fr_world_create(0.0, -9.81, 0.0);
     let ground_points = [-50.0, 0.0, -50.0, 50.0, 2.0, -50.0, 50.0, 0.0, 50.0, -50.0, 3.0, 50.0];
@@ -388,6 +490,7 @@ unsafe fn run_3d() {
     contacts_3d(world, &bodies);
     fr_world_destroy(world);
     joints_3d();
+    character_3d();
 }
 
 unsafe fn position_2d(world: *mut World2D, body: u32) -> [f32; 2] {
@@ -451,6 +554,85 @@ unsafe fn contacts_2d(world: *mut World2D, bodies: &[u32]) {
     println!("2d contacts {} {:08x}", total, depth.to_bits());
 }
 
+fn character_settings_2d() -> FrCharacterSettings2D {
+    FrCharacterSettings2D {
+        up: [0.0, 1.0],
+        offset: length(0.01),
+        slide: 1,
+        autostep: autostep(),
+        max_slope_climb_angle: std::f32::consts::FRAC_PI_4,
+        min_slope_slide_angle: std::f32::consts::FRAC_PI_4,
+        snap_to_ground: 1,
+        snap_distance: length(0.2),
+        normal_nudge_factor: 1.0e-4,
+        push_mass: 2.0,
+    }
+}
+
+unsafe fn static_box_2d(world: *mut World2D, half_extents: [f32; 2], position: [f32; 2], layer: u32, is_trigger: bool) {
+    let mut shape = collider_2d(0, half_extents, 0.0, 0.0, &[]);
+    shape.position = position;
+    shape.layer = layer;
+    shape.is_trigger = is_trigger as u32;
+    let mut first = 0;
+    fr2_world_add_static(world, &shape, 1, &mut first);
+}
+
+unsafe fn character_tick_2d(world: *mut World2D, character: u32, gate: u32, tick: u32) -> u32 {
+    if (40..=50).contains(&tick) {
+        let mut at = FrBodyState2D::default();
+        assert!(fr2_body_get(world, character, &mut at));
+        let state = FrBodyState2D { position: [at.position[0] + 0.7, 1.0], ..Default::default() };
+        assert!(fr2_body_set(world, gate, &state));
+    } else if tick == 51 {
+        let state = FrBodyState2D { position: [0.0, 10.0], ..Default::default() };
+        assert!(fr2_body_set(world, gate, &state));
+    }
+
+    let mut moved = FrCharacterMove2D::default();
+    assert!(fr2_character_move(world, character, 0.1, -0.02, SECONDS, &character_settings_2d(), &ALL, &mut moved));
+    fr2_world_step(world, SECONDS);
+    moved.grounded
+}
+
+unsafe fn character_2d() {
+    let world = fr2_world_create(0.0, -9.81);
+    assert!(fr2_world_set_layers(world, character_layers().as_ptr()));
+    static_box_2d(world, [20.0, 0.5], [8.0, -0.5], 0, false);
+    static_box_2d(world, [0.3, 1.0], [2.0, 1.0], 0, true);
+    static_box_2d(world, [1.0, 0.15], [4.0, 0.15], 0, false);
+    static_box_2d(world, [0.1, 1.5], [9.0, 1.5], SKIPPED_LAYER, false);
+
+    let mut capsule = collider_2d(2, [0.0; 2], 0.3, 0.5, &[]);
+    capsule.layer = CHARACTER_LAYER;
+    let character = fr2_body_create(world, 1, 0.0, 0.81, 0.0, 1.0, 0, 1.0, 0.0, 0.0, false, &capsule, 1);
+    let plate = collider_2d(0, [0.1, 1.0], 0.0, 0.0, &[]);
+    let gate = fr2_body_create(world, 1, 0.0, 10.0, 0.0, 1.0, 0, 1.0, 0.0, 0.0, false, &plate, 1);
+    let crate_box = collider_2d(0, [0.3, 0.3], 0.0, 0.0, &[]);
+    fr2_body_create(world, 0, 10.5, 0.3, 0.0, 1.0, 0, 1.0, 0.0, 0.0, false, &crate_box, 1);
+
+    let mut saved = Vec::new();
+    let mut at_snapshot = 0;
+    let mut grounded = 0;
+    for tick in 1..=CHARACTER_STEPS {
+        grounded += character_tick_2d(world, character, gate, tick);
+        if tick == CHARACTER_SNAPSHOT_AT {
+            at_snapshot = fr2_world_hash(world);
+            saved = snapshot_2d(world);
+        }
+    }
+
+    let at_end = fr2_world_hash(world);
+    println!("2d character {:016x} {:016x} {:08x} {}", at_snapshot, at_end, position_2d(world, character)[0].to_bits(), grounded);
+    assert!(fr2_world_load(world, saved.as_ptr(), saved.len() as u32));
+    for tick in CHARACTER_SNAPSHOT_AT + 1..=CHARACTER_STEPS {
+        character_tick_2d(world, character, gate, tick);
+    }
+
+    println!("2d character replay {}", fr2_world_hash(world) == at_end);
+    fr2_world_destroy(world);
+}
+
 unsafe fn run_2d() {
     let world = fr2_world_create(0.0, -9.81);
     let ground_points = [-50.0, 3.0, -10.0, 0.0, 10.0, 0.5, 50.0, 2.0];
@@ -502,6 +684,7 @@ unsafe fn run_2d() {
     contacts_2d(world, &bodies);
     fr2_world_destroy(world);
     joints_2d();
+    character_2d();
 }
 
 unsafe fn joints_2d() {

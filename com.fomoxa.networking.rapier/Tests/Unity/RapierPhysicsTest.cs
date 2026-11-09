@@ -6,6 +6,7 @@ using BundleFixture;
 using Fomoxa.Networking;
 using Fomoxa.Networking.Messaging;
 using Fomoxa.Networking.Objects;
+using Fomoxa.Networking.Rapier;
 using Fomoxa.Networking.Sessions;
 using Fomoxa.Networking.Simulation;
 using Fomoxa.Unity.Tests.Support;
@@ -647,6 +648,55 @@ namespace Fomoxa.Unity.Rapier.Tests
             Assert.IsTrue(onClient.Body.IsKinematic);
             Assert.IsTrue(trigger.IsAttached);
             CollectionAssert.AreEqual(new[] { "Wall" }, Names(trigger.Touching));
+        }
+
+        [Test]
+        public void TheServerMovesAKinematicCharacterThroughRapierScenesUntilAWallStopsIt()
+        {
+            Static("Ground", new Vector3(0f, -0.5f, 0f), new Vector3(40f, 1f, 40f), false);
+            Static("Wall", new Vector3(2f, 1f, 0f), new Vector3(0.2f, 2f, 2f), false);
+            Static("Zone", new Vector3(1f, 1f, 0f), new Vector3(0.4f, 2f, 2f), true);
+            NetworkObject characterPrefab = Prefab("Character", BallPrefabId, character =>
+            {
+                var capsule = character.AddComponent<CapsuleCollider>();
+                capsule.radius = 0.3f;
+                capsule.height = 1.6f;
+                character.AddComponent<Rigidbody>().isKinematic = true;
+            });
+            NetworkManager server = Manager(characterPrefab);
+            UseActiveScene(server);
+            server.ServerManager.StartConnection(1);
+            NetworkObject character = Spawn(server, characterPrefab, new Vector3(0f, 0.81f, 0f));
+            RunFrames(2);
+            RapierScenes scenes = server.GetComponent<RapierPhysics>().Scenes;
+
+            CharacterMove last = default;
+            for (int frame = 0; frame < 40; frame++)
+            {
+                last = scenes.MoveCharacter(character, character.Body, new System.Numerics.Vector3(0.1f, -0.02f, 0f), (float)FrameSeconds, CharacterSettings.Default);
+                RunFrames(1);
+            }
+
+            Assert.AreEqual(1.58f, character.transform.position.x, 0.05f);
+            Assert.AreEqual(0.81f, character.transform.position.y, 0.02f);
+            Assert.AreEqual(Quaternion.identity, character.transform.rotation);
+            Assert.IsTrue(last.Grounded);
+            Assert.AreEqual(0f, last.Moved.X, 1e-3f);
+            Assert.IsTrue(character.GetComponent<Rigidbody>().isKinematic);
+        }
+
+        [Test]
+        public void ACharacterControllerIsStillNotSupportedUnderRapier()
+        {
+            NetworkObject characterPrefab = Prefab("Controlled", BallPrefabId, character => character.AddComponent<CharacterController>());
+            NetworkManager server = Manager(characterPrefab);
+            server.ServerManager.StartConnection(1);
+            LogAssert.Expect(LogType.Exception, new Regex("CharacterController on Controlled\\(Clone\\): CharacterController is not supported"));
+            NetworkObject character = Spawn(server, characterPrefab, new Vector3(0f, 1f, 0f));
+
+            RunFrames(2);
+
+            Assert.IsFalse(character.Body.IsValid);
         }
 
         private GameObject Static(string name, Vector3 position, Vector3 size, bool isTrigger)

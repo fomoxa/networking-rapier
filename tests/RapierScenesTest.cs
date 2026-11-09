@@ -222,6 +222,32 @@ namespace Fomoxa.Networking.Rapier.Tests
         }
 
         [Test]
+        public void AnEntityMovesItsOwnCharacterBodyOnly()
+        {
+            using (var scenes = new RapierScenes())
+            {
+                StandaloneEntity entity = Entity();
+                StandaloneEntity other = Entity();
+                var capsule = new ColliderDesc(BodyShape.Capsule(0.3f, 0.5f), Vector3.Zero, Quaternion.Identity, ColliderMaterial.Default, 0, false);
+                PhysicsBody character = scenes.AddBody(entity, ArenaSceneId, new BodyDesc(BodyKind.Kinematic, new[] { capsule }, new Vector3(0f, 5f, 0f), Quaternion.Identity, 1f));
+                PhysicsBody stranger = scenes.AddBody(other, ArenaSceneId, new BodyDesc(BodyKind.Kinematic, new[] { capsule }, new Vector3(5f, 5f, 0f), Quaternion.Identity, 1f));
+                var flat = new ColliderDesc2D(BodyShape2D.Capsule(0.3f, 0.5f), Vector2.Zero, 0f, ColliderMaterial.Default, 0, false);
+                PhysicsBody2D character2D = scenes.AddBody2D(entity, ArenaSceneId, new BodyDesc2D(BodyKind.Kinematic, new[] { flat }, new Vector2(0f, 5f), 0f, 1f));
+
+                CharacterMove move = scenes.MoveCharacter(entity, character, new Vector3(1f, 0f, 0f), 1f / 60f, CharacterSettings.Default);
+                CharacterMove2D move2D = scenes.MoveCharacter(entity, character2D, new Vector2(1f, 0f), 1f / 60f, CharacterSettings2D.Default);
+                Run(scenes, 1);
+
+                Assert.AreEqual(1f, move.Moved.X, 1e-3f);
+                Assert.AreEqual(1f, character.Position.X, 1e-3f);
+                Assert.AreEqual(1f, move2D.Moved.X, 1e-3f);
+                Assert.AreEqual(1f, character2D.Position.X, 1e-3f);
+                Assert.Throws<ArgumentException>(() => scenes.MoveCharacter(entity, stranger, Vector3.UnitX, 1f / 60f, CharacterSettings.Default));
+                Assert.Throws<ArgumentException>(() => scenes.MoveCharacter(entity, default(PhysicsBody2D), Vector2.UnitX, 1f / 60f, CharacterSettings2D.Default));
+            }
+        }
+
+        [Test]
         public void BrokenGeometryAsksForANewExport()
         {
             using (var scenes = new RapierScenes())

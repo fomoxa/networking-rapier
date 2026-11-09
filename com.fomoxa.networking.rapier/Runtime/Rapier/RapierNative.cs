@@ -301,6 +301,108 @@ namespace Fomoxa.Networking.Rapier
             };
         }
 
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct CharacterLength
+        {
+            public float Value;
+            public uint Relative;
+
+            public static CharacterLength Of(Rapier.CharacterLength length) => new CharacterLength { Value = length.Value, Relative = length.IsRelative ? 1u : 0u };
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct CharacterAutostep
+        {
+            public uint Enabled;
+            public CharacterLength MaxHeight;
+            public CharacterLength MinWidth;
+            public uint IncludeDynamicBodies;
+
+            public static CharacterAutostep Of(Rapier.CharacterAutostep? autostep) => autostep is Rapier.CharacterAutostep step
+                ? new CharacterAutostep
+                {
+                    Enabled = 1u,
+                    MaxHeight = CharacterLength.Of(step.MaxHeight),
+                    MinWidth = CharacterLength.Of(step.MinWidth),
+                    IncludeDynamicBodies = step.IncludeDynamicBodies ? 1u : 0u,
+                }
+                : default;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct CharacterSettings
+        {
+            public Vector3 Up;
+            public CharacterLength Offset;
+            public uint Slide;
+            public CharacterAutostep Autostep;
+            public float MaxSlopeClimbAngle;
+            public float MinSlopeSlideAngle;
+            public uint SnapToGround;
+            public CharacterLength SnapDistance;
+            public float NormalNudgeFactor;
+            public float PushMass;
+
+            public static CharacterSettings Of(in Rapier.CharacterSettings settings) => new CharacterSettings
+            {
+                Up = settings.Up,
+                Offset = CharacterLength.Of(settings.Offset),
+                Slide = settings.Slide ? 1u : 0u,
+                Autostep = CharacterAutostep.Of(settings.Autostep),
+                MaxSlopeClimbAngle = settings.MaxSlopeClimbAngle,
+                MinSlopeSlideAngle = settings.MinSlopeSlideAngle,
+                SnapToGround = settings.SnapToGround.HasValue ? 1u : 0u,
+                SnapDistance = settings.SnapToGround.HasValue ? CharacterLength.Of(settings.SnapToGround.Value) : default,
+                NormalNudgeFactor = settings.NormalNudgeFactor,
+                PushMass = settings.PushMass,
+            };
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct CharacterSettings2D
+        {
+            public Vector2 Up;
+            public CharacterLength Offset;
+            public uint Slide;
+            public CharacterAutostep Autostep;
+            public float MaxSlopeClimbAngle;
+            public float MinSlopeSlideAngle;
+            public uint SnapToGround;
+            public CharacterLength SnapDistance;
+            public float NormalNudgeFactor;
+            public float PushMass;
+
+            public static CharacterSettings2D Of(in Rapier.CharacterSettings2D settings) => new CharacterSettings2D
+            {
+                Up = settings.Up,
+                Offset = CharacterLength.Of(settings.Offset),
+                Slide = settings.Slide ? 1u : 0u,
+                Autostep = CharacterAutostep.Of(settings.Autostep),
+                MaxSlopeClimbAngle = settings.MaxSlopeClimbAngle,
+                MinSlopeSlideAngle = settings.MinSlopeSlideAngle,
+                SnapToGround = settings.SnapToGround.HasValue ? 1u : 0u,
+                SnapDistance = settings.SnapToGround.HasValue ? CharacterLength.Of(settings.SnapToGround.Value) : default,
+                NormalNudgeFactor = settings.NormalNudgeFactor,
+                PushMass = settings.PushMass,
+            };
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct CharacterMove
+        {
+            public Vector3 Moved;
+            public uint Grounded;
+            public uint Sliding;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct CharacterMove2D
+        {
+            public Vector2 Moved;
+            public uint Grounded;
+            public uint Sliding;
+        }
+
         [DllImport(Library)]
         internal static extern IntPtr fr_world_create(float gravityX, float gravityY, float gravityZ);
 
@@ -392,6 +494,10 @@ namespace Fomoxa.Networking.Rapier
         [DllImport(Library)]
         [return: MarshalAs(UnmanagedType.U1)]
         internal static extern bool fr_body_add_impulse_at_point(IntPtr world, uint body, float impulseX, float impulseY, float impulseZ, float pointX, float pointY, float pointZ);
+
+        [DllImport(Library)]
+        [return: MarshalAs(UnmanagedType.U1)]
+        internal static extern bool fr_character_move(IntPtr world, uint body, in Vector3 desired, float seconds, in CharacterSettings settings, in QueryFilter filter, out CharacterMove moved);
 
         [DllImport(Library)]
         [return: MarshalAs(UnmanagedType.U1)]
@@ -567,6 +673,10 @@ namespace Fomoxa.Networking.Rapier
         [DllImport(Library)]
         [return: MarshalAs(UnmanagedType.U1)]
         internal static extern bool fr2_body_add_impulse_at_point(IntPtr world, uint body, float impulseX, float impulseY, float pointX, float pointY);
+
+        [DllImport(Library)]
+        [return: MarshalAs(UnmanagedType.U1)]
+        internal static extern bool fr2_character_move(IntPtr world, uint body, float desiredX, float desiredY, float seconds, in CharacterSettings2D settings, in QueryFilter filter, out CharacterMove2D moved);
 
         [DllImport(Library)]
         [return: MarshalAs(UnmanagedType.U1)]

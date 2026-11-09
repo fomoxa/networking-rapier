@@ -1,10 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::slice;
 
+use rapier3d::control::{CharacterAutostep, CharacterLength, KinematicCharacterController};
 use rapier3d::parry::query::{self, ShapeCastOptions};
 use rapier3d::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::character::*;
 use crate::contact::{collider_ref, collider_tag, write_items, write_refs, FrColliderRef};
 use crate::hash::StableHasher;
 use crate::joint::*;
@@ -101,6 +103,29 @@ pub struct FrJoint {
     pub damping: f32,
     pub softness: FrJointSoftness,
     pub contacts_enabled: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FrCharacterSettings {
+    pub up: [f32; 3],
+    pub offset: FrCharacterLength,
+    pub slide: u32,
+    pub autostep: FrCharacterAutostep,
+    pub max_slope_climb_angle: f32,
+    pub min_slope_slide_angle: f32,
+    pub snap_to_ground: u32,
+    pub snap_distance: FrCharacterLength,
+    pub normal_nudge_factor: f32,
+    pub push_mass: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FrCharacterMove {
+    pub moved: [f32; 3],
+    pub grounded: u32,
+    pub sliding: u32,
 }
 
 #[derive(Clone)]
@@ -443,6 +468,91 @@ impl World {
                 self.joints.insert(id, JointEntry { handle, ..entry });
             }
         }
+    }
+
+    fn sync_dirty(&mut self) {
+        for (index, generation) in &self.dirty {
+            let handle = ColliderHandle::from_raw_parts(*index, *generation);
+            let pose = match self.physics.colliders.get(handle) {
+                Some(collider) => match (collider.parent().and_then(|parent| self.physics.bodies.get(parent)), collider.position_wrt_parent()) {
+                    (Some(body), Some(local)) => *body.position() * *local,
+                    _ => *collider.position(),
+                },
+                None => continue,
+            };
+            if let Some(collider) = self.physics.colliders.get_mut(handle) {
+                collider.set_position(pose);
+                let aabb = collider.compute_aabb();
+                self.physics.broad_phase.set_aabb(&self.physics.integration_parameters, handle, aabb);
+            }
+        }
+    }
+
+    fn move_character(&mut self, id: u32, desired: Vector, seconds: f32, settings: &FrCharacterSettings, filter: &FrQueryFilter) -> Option<FrCharacterMove> {
+        if !seconds.is_finite() || seconds < 0.0 || !desired.is_finite() {
+            return None;
+        }
+
+        let controller = controller_of(settings)?;
+        let handle = self.bodies.get(&id)?.handle;
+        let body = self.physics.bodies.get(handle)?;
+        if !body.is_kinematic() {
+            return None;
+        }
+
+        let mut solid = body.colliders().iter().copied().filter(|collider| self.physics.colliders.get(*collider).is_some_and(|collider| !collider.is_sensor()));
+        let collider_handle = solid.next()?;
+        if solid.next().is_some() {
+            return None;
+        }
+
+        let collider = self.physics.colliders.get(collider_handle)?;
+        let shape = collider.shared_shape().clone();
+        if !matches!(shape.shape_type(), ShapeType::Ball | ShapeType::Cuboid | ShapeType::Capsule) {
+            return None;
+        }
+
+        let groups = collider.collision_groups();
+        let character_pose = *body.position() * *collider.position_wrt_parent()?;
+        let excluded = if filter.exclude_body == 0 { None } else { self.bodies.get(&filter.exclude_body).map(|entry| entry.handle) };
+        self.sync_dirty();
+
+        let layer_mask = filter.layer_mask;
+        let predicate = move |_: ColliderHandle, collider: &Collider| {
+            collider.collision_groups().memberships.bits() & layer_mask != 0 && (excluded.is_none() || collider.parent() != excluded)
+        };
+        let query_filter = QueryFilter::new().exclude_sensors().exclude_rigid_body(handle).groups(groups).predicate(&predicate);
+        let mut collisions = Vec::new();
+        let movement = {
+            let pipeline = self.physics.broad_phase.as_query_pipeline(
+                self.physics.narrow_phase.query_dispatcher(),
+                &self.physics.bodies,
+                &self.physics.colliders,
+                query_filter,
+            );
+            controller.move_shape(seconds, &pipeline, &*shape, &character_pose, desired, |collision| collisions.push(collision))
+        };
+
+        let sliding = movement.translation.dot(controller.up) < 0.0
+            && collisions.iter().any(|collision| slides_on(collision.hit.normal1.dot(controller.up), settings.min_slope_slide_angle));
+        if settings.push_mass > 0.0 && !collisions.is_empty() {
+            let mut pipeline = self.physics.broad_phase.as_query_pipeline_mut(
+                self.physics.narrow_phase.query_dispatcher(),
+                &mut self.physics.bodies,
+                &mut self.physics.colliders,
+                query_filter,
+            );
+            controller.solve_character_collision_impulses(seconds, &mut pipeline, &*shape, settings.push_mass, &collisions);
+        }
+
+        let body = self.physics.bodies.get_mut(handle)?;
+        let target = body.translation() + movement.translation;
+        body.set_next_kinematic_translation(target);
+        Some(FrCharacterMove {
+            moved: [movement.translation.x, movement.translation.y, movement.translation.z],
+            grounded: movement.grounded as u32,
+            sliding: sliding as u32,
+        })
     }
 
     fn body(&self, id: u32) -> Option<&RigidBody> {
@@ -886,6 +996,48 @@ fn build_joint(recipe: &FrJoint) -> Option<GenericJoint> {
     }
 
     Some(joint)
+}
+
+fn character_length(length: &FrCharacterLength) -> Option<CharacterLength> {
+    if !length.is_valid() {
+        return None;
+    }
+
+    Some(if length.relative != 0 { CharacterLength::Relative(length.value) } else { CharacterLength::Absolute(length.value) })
+}
+
+fn controller_of(settings: &FrCharacterSettings) -> Option<KinematicCharacterController> {
+    let up = Vector::new(settings.up[0], settings.up[1], settings.up[2]).try_normalize()?;
+    let offset = character_length(&settings.offset)?;
+    if settings.offset.value <= 0.0
+        || !valid_angle(settings.max_slope_climb_angle)
+        || !valid_angle(settings.min_slope_slide_angle)
+        || !valid_amount(settings.normal_nudge_factor)
+        || !valid_amount(settings.push_mass)
+    {
+        return None;
+    }
+
+    let autostep = if settings.autostep.enabled != 0 {
+        Some(CharacterAutostep {
+            max_height: character_length(&settings.autostep.max_height)?,
+            min_width: character_length(&settings.autostep.min_width)?,
+            include_dynamic_bodies: settings.autostep.include_dynamic_bodies != 0,
+        })
+    } else {
+        None
+    };
+    let snap_to_ground = if settings.snap_to_ground != 0 { Some(character_length(&settings.snap_distance)?) } else { None };
+    Some(KinematicCharacterController {
+        up,
+        offset,
+        slide: settings.slide != 0,
+        autostep,
+        max_slope_climb_angle: settings.max_slope_climb_angle,
+        min_slope_slide_angle: settings.min_slope_slide_angle,
+        snap_to_ground,
+        normal_nudge_factor: settings.normal_nudge_factor,
+    })
 }
 
 fn body_type(kind: u32) -> RigidBodyType {
@@ -1332,6 +1484,29 @@ unsafe fn read_pose(position: *const f32, rotation: *const f32) -> Option<Pose> 
 
 unsafe fn write_hit(found: Option<FrRayHit>, hit: *mut FrRayHit) -> bool {
     match (found, hit.as_mut()) {
+        (Some(found), Some(out)) => {
+            *out = found;
+            true
+        }
+        _ => false,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fr_character_move(
+    world_ptr: *mut World,
+    body: u32,
+    desired: *const f32,
+    seconds: f32,
+    settings: *const FrCharacterSettings,
+    filter: *const FrQueryFilter,
+    moved: *mut FrCharacterMove,
+) -> bool {
+    let found = match (world(world_ptr), read_vector(desired), settings.as_ref(), filter.as_ref()) {
+        (Some(world), Some(desired), Some(settings), Some(filter)) => world.move_character(body, desired, seconds, settings, filter),
+        _ => None,
+    };
+    match (found, moved.as_mut()) {
         (Some(found), Some(out)) => {
             *out = found;
             true
