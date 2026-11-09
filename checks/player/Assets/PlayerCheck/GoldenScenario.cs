@@ -22,6 +22,9 @@ namespace Fomoxa.Rapier.PlayerCheck
         private const int CharacterSnapshotAt = 60;
         private const int CharacterLayer = 1;
         private const int SkippedLayer = 2;
+        private const int EffectorSteps = 120;
+        private const int EffectorSnapshotAt = 60;
+        private const int EffectorRetuneAt = 70;
 
         private static readonly ColliderMaterial Material = new ColliderMaterial(0.6f, 0.1f, CombineRule.Average, CombineRule.Average);
         private static readonly Quaternion Turned = new Quaternion(0.6f, 0f, 0f, 0.8f);
@@ -35,6 +38,7 @@ namespace Fomoxa.Rapier.PlayerCheck
             Run2D(lines);
             Joints2D(lines);
             Character2D(lines);
+            Effectors2D(lines);
             return lines;
         }
 
@@ -434,6 +438,69 @@ namespace Fomoxa.Rapier.PlayerCheck
             }
         }
 
+        private static void Effectors2D(List<string> lines)
+        {
+            using (var world = new RapierWorld2D(new Vector2(0f, -9.81f)))
+            {
+                StaticGroup group = world.AddStatic(new[]
+                {
+                    Collider(BodyShape2D.Box(new Vector2(20f, 0.5f)), new Vector2(0f, -0.5f), false),
+                    Collider(BodyShape2D.Box(new Vector2(1.5f, 0.1f)), new Vector2(-6f, 2f), false),
+                    Collider(BodyShape2D.Box(new Vector2(2f, 2f)), new Vector2(6f, 3f), true),
+                    Collider(BodyShape2D.Box(new Vector2(3f, 1.5f)), new Vector2(-12f, 1.5f), true),
+                });
+                world.AddEffector(group, new[] { 0 }, EffectorDesc2D.Surface(2f, 0.5f, false, true, true));
+                world.AddEffector(group, new[] { 1 }, EffectorDesc2D.Platform(true, false, 0f, MathF.PI, true, true, 0f).WithFrame(new Vector2(-6f, 2f), 0f));
+                EffectorHandle gust = world.AddEffector(group, new[] { 2 }, Wind(8f));
+                world.AddEffector(group, new[] { 3 }, EffectorDesc2D.Buoyancy(1.5f, 2f, 1f, 1f, 0f, 1f).WithFrame(new Vector2(-12f, 1.5f), 0f));
+
+                var motion = new BodyMotion2D(BodyLocks2D.None, 1f, 0f, 0f);
+                BodyHandle magnet = world.CreateBody(new BodyDesc2D(BodyKind.Kinematic, new[] { Collider(BodyShape2D.Circle(3f), Vector2.Zero, true) }, new Vector2(12f, 6f), 0f, 1f, motion));
+                world.AddEffector(magnet, new[] { 0 }, EffectorDesc2D.Point(-12f, 1f, EffectorSelection.Rigidbody, EffectorSelection.Rigidbody, EffectorForceMode.InverseLinear, 0f, 0f));
+                BodyHandle crate = world.CreateBody(new BodyDesc2D(BodyKind.Dynamic, new[] { Collider(BodyShape2D.Box(new Vector2(0.4f, 0.4f))) }, new Vector2(-1f, 0.4f), 0f, 1f, motion));
+                BodyHandle jumper = world.CreateBody(new BodyDesc2D(BodyKind.Dynamic, new[] { Collider(BodyShape2D.Box(new Vector2(0.3f, 0.3f))) }, new Vector2(-7f, 0.3f), 0f, 1f, motion));
+                world.SetBody(jumper, new BodyState2D { Position = new Vector2(-7f, 0.3f), Velocity = new Vector2(0f, 9f) });
+                world.CreateBody(new BodyDesc2D(BodyKind.Dynamic, new[] { Collider(BodyShape2D.Circle(0.3f)) }, new Vector2(5f, 3f), 0f, 1f, motion));
+                world.CreateBody(new BodyDesc2D(BodyKind.Dynamic, new[] { Collider(BodyShape2D.Box(new Vector2(0.5f, 0.5f))) }, new Vector2(-12f, 3.5f), 0f, 1f, motion));
+                world.CreateBody(new BodyDesc2D(BodyKind.Dynamic, new[] { Collider(BodyShape2D.Circle(0.25f)) }, new Vector2(10f, 6f), 0f, 1f, new BodyMotion2D(BodyLocks2D.None, 0f, 0f, 0f)));
+
+                PhysicsSnapshot saved = world.CreateSnapshot();
+                ulong atSnapshot = 0;
+                for (int tick = 1; tick <= EffectorSteps; tick++)
+                {
+                    EffectorTick2D(world, gust, tick);
+                    if (tick == EffectorSnapshotAt)
+                    {
+                        atSnapshot = world.StateHash;
+                        world.Save(saved);
+                    }
+                }
+
+                ulong atEnd = world.StateHash;
+                lines.Add($"2d effectors {atSnapshot:x16} {atEnd:x16} {Bits(world.GetBody(crate).Position.X)} {Bits(world.GetBody(jumper).Position.Y)}");
+                world.Load(saved);
+                for (int tick = EffectorSnapshotAt + 1; tick <= EffectorSteps; tick++)
+                {
+                    EffectorTick2D(world, gust, tick);
+                }
+
+                lines.Add($"2d effectors replay {Flag(world.StateHash == atEnd)}");
+            }
+        }
+
+        private static void EffectorTick2D(RapierWorld2D world, EffectorHandle gust, int tick)
+        {
+            if (tick == EffectorRetuneAt)
+            {
+                world.SetEffector(gust, Wind(-8f));
+            }
+
+            world.Step(Seconds);
+        }
+
+        private static EffectorDesc2D Wind(float forceMagnitude) =>
+            EffectorDesc2D.Area(0f, true, forceMagnitude, EffectorSelection.Rigidbody, 0f, 0f).WithFrame(new Vector2(6f, 3f), 0f);
+
         private static int CharacterTick3D(RapierWorld world, BodyHandle character, BodyHandle gate, int tick)
         {
             if (tick >= 40 && tick <= 50)
@@ -638,6 +705,8 @@ namespace Fomoxa.Rapier.PlayerCheck
         private static ColliderDesc Collider(BodyShape shape) => new ColliderDesc(shape, Vector3.Zero, Quaternion.Identity, Material, 0, false);
 
         private static ColliderDesc2D Collider(BodyShape2D shape) => new ColliderDesc2D(shape, Vector2.Zero, 0f, Material, 0, false);
+
+        private static ColliderDesc2D Collider(BodyShape2D shape, Vector2 position, bool isTrigger) => new ColliderDesc2D(shape, position, 0f, Material, 0, isTrigger);
 
         private static string Flag(bool value) => value ? "true" : "false";
 

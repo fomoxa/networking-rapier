@@ -699,6 +699,84 @@ namespace Fomoxa.Unity.Rapier.Tests
             Assert.IsFalse(character.Body.IsValid);
         }
 
+        [Test]
+        public void TheEffectorsOfTheSceneFileAndOfAPrefabPushWhatTheyTouch()
+        {
+            GameObject wind = Static2D("Wind", new Vector2(-5f, 2f), new Vector2(4f, 6f), true);
+            var area = wind.AddComponent<AreaEffector2D>();
+            area.forceMagnitude = 10f;
+            area.forceAngle = 0f;
+            area.useGlobalAngle = true;
+            NetworkObject floatingPrefab = Prefab("Floating", BallPrefabId, ball =>
+            {
+                ball.AddComponent<CircleCollider2D>().radius = 0.5f;
+                ball.AddComponent<Rigidbody2D>().gravityScale = 0f;
+            });
+            NetworkObject crate = Prefab("Crate", ScaledBallPrefabId, ball =>
+            {
+                ball.AddComponent<BoxCollider2D>().size = Vector2.one;
+                ball.AddComponent<Rigidbody2D>();
+            });
+            NetworkObject beltPrefab = Prefab("Belt", GroundPrefabId, belt =>
+            {
+                var box = belt.AddComponent<BoxCollider2D>();
+                box.size = new Vector2(20f, 1f);
+                box.usedByEffector = true;
+                var surface = belt.AddComponent<SurfaceEffector2D>();
+                surface.speed = 3f;
+                surface.speedVariation = 1f;
+            });
+            NetworkManager server = Manager(floatingPrefab, crate, beltPrefab);
+            UseActiveScene2D(server);
+            server.ServerManager.StartConnection(1);
+            LogAssert.Expect(LogType.Warning, new Regex("SurfaceEffector2D on Belt\\(Clone\\): Rapier does not simulate speedVariation, so they count as 0"));
+            Spawn(server, beltPrefab, new Vector3(5f, -0.5f, 0f));
+            NetworkObject floating = Spawn(server, floatingPrefab, new Vector3(-5f, 2f, 0f));
+            NetworkObject carried = Spawn(server, crate, new Vector3(5f, 0.5f, 0f));
+
+            RunFrames(60);
+
+            Assert.Greater(floating.transform.position.x, -3.5f);
+            Assert.AreEqual(2f, floating.transform.position.y, 1e-3f);
+            Assert.Greater(carried.transform.position.x, 6f);
+            Assert.AreEqual(0.5f, carried.transform.position.y, 0.05f);
+        }
+
+        [Test]
+        public void AnEffectorOnABlockAddedAtRuntimeDrivesWhatRestsOnItUntilTheBlockIsRemoved()
+        {
+            NetworkObject cratePrefab = Prefab("Crate", BallPrefabId, crate =>
+            {
+                crate.AddComponent<BoxCollider2D>().size = Vector2.one;
+                crate.AddComponent<Rigidbody2D>();
+            });
+            NetworkManager server = Manager(cratePrefab);
+            UseActiveScene(server);
+            server.ServerManager.StartConnection(1);
+            var physics = server.GetComponent<RapierPhysics>();
+            var block = new GameObject("Block");
+            created.Add(block);
+            var belt = new GameObject("Belt");
+            belt.transform.SetParent(block.transform, false);
+            belt.transform.localPosition = new Vector3(0f, -0.5f, 0f);
+            var box = belt.AddComponent<BoxCollider2D>();
+            box.size = new Vector2(20f, 1f);
+            box.usedByEffector = true;
+            belt.AddComponent<SurfaceEffector2D>().speed = 3f;
+
+            StaticGroup group = physics.AddStatic2D(block);
+            NetworkObject crate = Spawn(server, cratePrefab, new Vector3(0f, 0.5f, 0f));
+            RunFrames(60);
+
+            Assert.Greater(crate.transform.position.x, 1f);
+            Assert.AreEqual(0.5f, crate.transform.position.y, 0.05f);
+
+            physics.RemoveStatic(group);
+            RunFrames(60);
+
+            Assert.Less(crate.transform.position.y, -1f);
+        }
+
         private GameObject Static(string name, Vector3 position, Vector3 size, bool isTrigger)
         {
             var gameObject = new GameObject(name);
@@ -730,6 +808,68 @@ namespace Fomoxa.Unity.Rapier.Tests
             for (int layer = 0; layer < 32; layer++)
             {
                 file.LayerCollisions.Add(uint.MaxValue);
+            }
+
+            byte[] bytes = SceneFileFormat.Write(TestObjects.Registry(), file);
+            var physics = manager.GetComponent<RapierPhysics>();
+            physics.SceneIdOf = scene => scene == active ? ArenaSceneId : 0;
+            physics.SceneFileOf = sceneId => sceneId == ArenaSceneId ? bytes : null;
+        }
+
+        private GameObject Static2D(string name, Vector2 position, Vector2 size, bool isTrigger)
+        {
+            var gameObject = new GameObject(name);
+            created.Add(gameObject);
+            gameObject.transform.position = position;
+            var box = gameObject.AddComponent<BoxCollider2D>();
+            box.size = size;
+            box.isTrigger = isTrigger;
+            box.usedByEffector = true;
+            return gameObject;
+        }
+
+        private static void UseActiveScene2D(NetworkManager manager)
+        {
+            Scene active = SceneManager.GetActiveScene();
+            var sources = new List<Collider2D>();
+            var colliders = new List<ColliderDesc2D>();
+            var pieces = new List<Collider2D>();
+            BodyDescriptions.StaticColliders2D(active, sources);
+            for (int index = 0; index < sources.Count; index++)
+            {
+                if (index == 0 || sources[index] != sources[index - 1])
+                {
+                    BodyDescriptions.DescribeStatic2D(sources[index], null, colliders);
+                    while (pieces.Count < colliders.Count)
+                    {
+                        pieces.Add(sources[index]);
+                    }
+                }
+            }
+
+            var file = new SceneFile { SceneId = ArenaSceneId };
+            var effectors = new List<Effector2D>();
+            var ignored = new List<string>();
+            for (int index = 0; index < colliders.Count; index++)
+            {
+                SceneFileCollider2D collider = SceneFileGeometry.ToFile(colliders[index]);
+                if (EffectorDescriptions.TryFind(pieces[index], out Effector2D effector))
+                {
+                    if (!effectors.Contains(effector))
+                    {
+                        effectors.Add(effector);
+                        file.Effectors2D.Add(EffectorDescriptions.Describe(effector, null, ignored));
+                    }
+
+                    collider.Effector = (ushort)(effectors.IndexOf(effector) + 1);
+                }
+
+                file.Colliders2D.Add(collider);
+            }
+
+            for (int layer = 0; layer < 32; layer++)
+            {
+                file.LayerCollisions2D.Add(uint.MaxValue);
             }
 
             byte[] bytes = SceneFileFormat.Write(TestObjects.Registry(), file);

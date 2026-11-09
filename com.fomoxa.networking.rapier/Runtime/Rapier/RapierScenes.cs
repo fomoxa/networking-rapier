@@ -27,6 +27,8 @@ namespace Fomoxa.Networking.Rapier
         private readonly List<UnownedBody2D> unowned2D = new List<UnownedBody2D>();
         private readonly List<BodyHandle> movedBodies = new List<BodyHandle>();
         private readonly List<INetworkEntity> released = new List<INetworkEntity>();
+        private readonly Dictionary<(uint SceneId, ulong SceneObjectId), List<List<FileEffector>>> objectEffectors = new Dictionary<(uint SceneId, ulong SceneObjectId), List<List<FileEffector>>>();
+        private readonly List<(uint SceneId, ulong SceneObjectId)> leavingObjects = new List<(uint SceneId, ulong SceneObjectId)>();
         private int nextStatic = 1;
 
         public RapierScenes()
@@ -99,6 +101,17 @@ namespace Fomoxa.Networking.Rapier
 
             try
             {
+                List<FileEffector> staticEffectors = EffectorsOf(file.Colliders2D, file.Effectors2D);
+                var sceneObjectEffectors = new Dictionary<ulong, List<List<FileEffector>>>();
+                foreach (SceneFileObject sceneObject in file.Objects)
+                {
+                    List<List<FileEffector>> perBody = EffectorsOf(sceneObject, file.Effectors2D);
+                    if (perBody != null)
+                    {
+                        sceneObjectEffectors[sceneObject.SceneObjectId] = perBody;
+                    }
+                }
+
                 Remember(layers, file.SceneId, file.LayerCollisions);
                 Remember(layers2D, file.SceneId, file.LayerCollisions2D);
                 if (colliders.Count > 0)
@@ -120,7 +133,16 @@ namespace Fomoxa.Networking.Rapier
                         world.SetLayerCollisions(masks);
                     }
 
-                    world.AddStatic(colliders2D);
+                    StaticGroup group = world.AddStatic(colliders2D);
+                    foreach (FileEffector effector in staticEffectors)
+                    {
+                        world.AddEffector(group, effector.Colliders, effector.Desc);
+                    }
+                }
+
+                foreach (KeyValuePair<ulong, List<List<FileEffector>>> entry in sceneObjectEffectors)
+                {
+                    objectEffectors[(file.SceneId, entry.Key)] = entry.Value;
                 }
             }
             catch (ArgumentException exception)
@@ -129,10 +151,78 @@ namespace Fomoxa.Networking.Rapier
             }
         }
 
+        private static List<List<FileEffector>> EffectorsOf(SceneFileObject sceneObject, List<SceneFileEffector2D> effectors)
+        {
+            var perBody = new List<List<FileEffector>>();
+            bool any = false;
+            if (sceneObject.Body2D != null && sceneObject.Body2D.Kind != 0)
+            {
+                perBody.Add(EffectorsOf(sceneObject.Body2D.Colliders, effectors));
+                any |= perBody[perBody.Count - 1].Count > 0;
+            }
+
+            foreach (SceneFileChildBody2D child in sceneObject.ChildBodies2D)
+            {
+                perBody.Add(EffectorsOf(child.Body?.Colliders ?? new List<SceneFileCollider2D>(), effectors));
+                any |= perBody[perBody.Count - 1].Count > 0;
+            }
+
+            return any ? perBody : null;
+        }
+
+        private static List<FileEffector> EffectorsOf(List<SceneFileCollider2D> colliders, List<SceneFileEffector2D> effectors)
+        {
+            var grouped = new SortedDictionary<int, List<int>>();
+            for (int index = 0; index < colliders.Count; index++)
+            {
+                int effector = colliders[index].Effector;
+                if (effector == 0)
+                {
+                    continue;
+                }
+
+                if (effector > effectors.Count)
+                {
+                    throw new ArgumentException($"collider {index} names effector {effector} of {effectors.Count}");
+                }
+
+                if (!grouped.TryGetValue(effector, out List<int> indices))
+                {
+                    indices = new List<int>();
+                    grouped.Add(effector, indices);
+                }
+
+                indices.Add(index);
+            }
+
+            var found = new List<FileEffector>(grouped.Count);
+            foreach (KeyValuePair<int, List<int>> entry in grouped)
+            {
+                found.Add(new FileEffector(entry.Value, RapierEffectors.FromFile(effectors[entry.Key - 1])));
+            }
+
+            return found;
+        }
+
         public void UnloadScene(uint sceneId)
         {
             layers.Remove(sceneId);
             layers2D.Remove(sceneId);
+            leavingObjects.Clear();
+            foreach ((uint SceneId, ulong SceneObjectId) key in objectEffectors.Keys)
+            {
+                if (key.SceneId == sceneId)
+                {
+                    leavingObjects.Add(key);
+                }
+            }
+
+            foreach ((uint SceneId, ulong SceneObjectId) key in leavingObjects)
+            {
+                objectEffectors.Remove(key);
+            }
+
+            leavingObjects.Clear();
             if (worlds.Remove(sceneId, out RapierWorld world))
             {
                 histories.Remove(world);
@@ -246,8 +336,41 @@ namespace Fomoxa.Networking.Rapier
         {
             RapierWorld2D world = WorldOf2D(sceneId);
             BodyHandle handle = world.CreateBody(body);
+            int order = Count2D(entity);
             Track(entity, world, handle);
+            if (entity.SceneObjectId != 0 && objectEffectors.TryGetValue((sceneId, entity.SceneObjectId), out List<List<FileEffector>> perBody) && order < perBody.Count)
+            {
+                foreach (FileEffector effector in perBody[order])
+                {
+                    world.AddEffector(handle, effector.Colliders, effector.Desc);
+                }
+            }
+
             return new PhysicsBody2D(world, handle);
+        }
+
+        public EffectorHandle AddEffector(INetworkEntity owner, PhysicsBody2D body, IReadOnlyList<int> colliders, in EffectorDesc2D desc) =>
+            ((RapierWorld2D)OwnerWorld(owner, body.Handle, true)).AddEffector(body.Handle, colliders, desc);
+
+        public EffectorHandle AddEffector(StaticGroup group, IReadOnlyList<int> colliders, in EffectorDesc2D desc)
+        {
+            if (!statics.TryGetValue(group.Id, out StaticEntry entry) || entry.World2D == null)
+            {
+                throw new ArgumentException($"static group {group.Id} is not a 2D group of these scenes", nameof(group));
+            }
+
+            return entry.World2D.AddEffector(entry.Inner, colliders, desc);
+        }
+
+        public EffectorHandle AddEffector(PhysicsBody2D body, IReadOnlyList<int> colliders, in EffectorDesc2D desc)
+        {
+            int index = unowned2D.FindIndex(entry => EqualityComparer<PhysicsBody2D>.Default.Equals(entry.Body, body));
+            if (index < 0)
+            {
+                throw new ArgumentException("the body is not an unowned 2D body of these scenes; the body of an entity takes the overload with its owner", nameof(body));
+            }
+
+            return unowned2D[index].World.AddEffector(unowned2D[index].Handle, colliders, desc);
         }
 
         public JointHandle CreateJoint(INetworkEntity owner, PhysicsBody a, PhysicsBody b, in JointDesc desc) =>
@@ -409,6 +532,7 @@ namespace Fomoxa.Networking.Rapier
             owners.Clear();
             histories.Clear();
             statics.Clear();
+            objectEffectors.Clear();
             unowned.Clear();
             unowned2D.Clear();
             released.Clear();
@@ -545,6 +669,36 @@ namespace Fomoxa.Networking.Rapier
             }
 
             forgotten.Clear();
+        }
+
+        private int Count2D(INetworkEntity entity)
+        {
+            int count = 0;
+            if (entity != null && bodies.TryGetValue(entity, out List<Part> parts))
+            {
+                foreach (Part part in parts)
+                {
+                    if (part.World is IPhysicsWorld2D)
+                    {
+                        count++;
+                    }
+                }
+            }
+
+            return count;
+        }
+
+        private readonly struct FileEffector
+        {
+            public FileEffector(List<int> colliders, EffectorDesc2D desc)
+            {
+                Colliders = colliders;
+                Desc = desc;
+            }
+
+            public List<int> Colliders { get; }
+
+            public EffectorDesc2D Desc { get; }
         }
 
         private readonly struct StaticEntry

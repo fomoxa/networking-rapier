@@ -1,5 +1,6 @@
 mod character;
 mod contact;
+mod effector;
 mod hash;
 mod joint;
 mod math;
@@ -9,6 +10,7 @@ mod world3d;
 
 pub use character::{FrCharacterAutostep, FrCharacterLength};
 pub use contact::FrColliderRef;
+pub use effector::FrEffector2D;
 pub use joint::{FrJointLimit, FrJointMotor, FrJointSoftness};
 pub use query::FrQueryFilter;
 pub use world2d::*;

@@ -1,18 +1,19 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::slice;
 
-use rapier2d::control::{CharacterAutostep, CharacterLength, KinematicCharacterController};
+use rapier2d::control::{CharacterAutostep, CharacterCollision, CharacterLength, KinematicCharacterController};
 use rapier2d::parry::query::{self, ShapeCastOptions};
 use rapier2d::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::character::*;
 use crate::contact::{collider_ref, collider_tag, write_items, write_refs, FrColliderRef};
+use crate::effector::*;
 use crate::hash::StableHasher;
 use crate::joint::*;
 use crate::query::FrQueryFilter;
 
-const SNAPSHOT_FORMAT: u32 = 4;
+const SNAPSHOT_FORMAT: u32 = 5;
 const ALL_LAYERS: u32 = u32::MAX;
 
 const LOCK_POSITION_X: u32 = 1;
@@ -176,6 +177,110 @@ struct JointEntry {
     recipe: FrJoint2D,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+struct EffectorEntry {
+    body: u32,
+    group: u32,
+    colliders: Vec<u32>,
+    recipe: FrEffector2D,
+}
+
+enum EffectorAction {
+    Damp(RigidBodyHandle, f32, f32),
+    Force(RigidBodyHandle, Vector, Option<Vector>),
+    Torque(RigidBodyHandle, f32),
+    Velocity(RigidBodyHandle, Vector),
+    Impulse(RigidBodyHandle, Vector, Vector),
+}
+
+struct EffectorHooks<'a> {
+    index: &'a BTreeMap<(u32, u32), u32>,
+    effectors: &'a BTreeMap<u32, EffectorEntry>,
+    grouped: &'a BTreeSet<(u32, u32)>,
+}
+
+impl PhysicsHooks for EffectorHooks<'_> {
+    fn modify_solver_contacts(&self, context: &mut ContactModificationContext) {
+        let (id, effector_first) = match (self.index.get(&context.collider1.into_raw_parts()), self.index.get(&context.collider2.into_raw_parts())) {
+            (Some(id), _) => (*id, true),
+            (None, Some(id)) => (*id, false),
+            _ => return,
+        };
+        let effector = match self.effectors.get(&id) {
+            Some(entry) => entry.recipe,
+            None => return,
+        };
+        let (own, other) = if effector_first { (context.rigid_body1, context.rigid_body2) } else { (context.rigid_body2, context.rigid_body1) };
+        let owner_angle = own.and_then(|handle| context.bodies.get(handle)).map_or(0.0, |body| body.rotation().angle());
+        let other_id = other.and_then(|handle| context.bodies.get(handle)).map_or(0, |body| body.user_data as u32);
+        let rigid = match context.rigid_mut() {
+            Some(rigid) => rigid,
+            None => return,
+        };
+        let normal = if effector_first { *rigid.normal } else { -*rigid.normal };
+        match effector.kind {
+            EFFECTOR_PLATFORM => {
+                let up = up_of(owner_angle + effector.rotation + effector.rotational_offset);
+                let right = Vector::new(up.y, -up.x);
+                let side = normal.dot(right).abs() >= libm::cosf(effector.side_arc * 0.5);
+                if side && effector.side_friction == 0 {
+                    *rigid.friction = 0.0;
+                }
+
+                if side && effector.side_bounce == 0 {
+                    *rigid.restitution = 0.0;
+                }
+
+                if effector.one_way != 0 {
+                    if effector.one_way_grouping != 0 && self.grouped.contains(&(id, other_id)) {
+                        rigid.solver_contacts.clear();
+                        *rigid.user_data = CONTACT_FORBIDDEN;
+                    } else {
+                        one_way(rigid, within_arc(normal, up, effector.surface_arc));
+                    }
+                }
+            }
+            EFFECTOR_SURFACE => {
+                if effector.friction == 0 {
+                    *rigid.friction = 0.0;
+                }
+
+                if effector.bounce == 0 {
+                    *rigid.restitution = 0.0;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn one_way(rigid: &mut ModifiableManifold, allowed: bool) {
+    match *rigid.user_data {
+        CONTACT_UNKNOWN => {
+            if allowed {
+                *rigid.user_data = CONTACT_ALLOWED;
+            } else {
+                rigid.solver_contacts.clear();
+                if rigid.manifold.local_n1.length_squared() > 0.1 {
+                    *rigid.user_data = CONTACT_FORBIDDEN;
+                }
+            }
+        }
+        CONTACT_FORBIDDEN => {
+            if allowed && rigid.solver_contacts.iter().all(|contact| contact.dist > 0.0) {
+                *rigid.user_data = CONTACT_ALLOWED;
+            } else {
+                rigid.solver_contacts.clear();
+            }
+        }
+        _ => {
+            if rigid.solver_contacts.is_empty() {
+                *rigid.user_data = CONTACT_UNKNOWN;
+            }
+        }
+    }
+}
+
 #[derive(Serialize)]
 struct SnapshotRef<'a> {
     format: u32,
@@ -185,6 +290,7 @@ struct SnapshotRef<'a> {
     dirty: Vec<(u32, u32)>,
     joints: Vec<(u32, u32, u32, FrJoint2D)>,
     anchor: Option<(u32, u32)>,
+    effectors: Vec<(u32, &'a EffectorEntry)>,
 }
 
 #[derive(Deserialize)]
@@ -196,6 +302,7 @@ struct Snapshot {
     dirty: Vec<(u32, u32)>,
     joints: Vec<(u32, u32, u32, FrJoint2D)>,
     anchor: Option<(u32, u32)>,
+    effectors: Vec<(u32, EffectorEntry)>,
 }
 
 pub struct World2D {
@@ -212,6 +319,8 @@ pub struct World2D {
     joints: BTreeMap<u32, JointEntry>,
     next_joint: u32,
     anchor: Option<RigidBodyHandle>,
+    effectors: BTreeMap<u32, EffectorEntry>,
+    next_effector: u32,
 }
 
 impl World2D {
@@ -232,17 +341,421 @@ impl World2D {
             joints: BTreeMap::new(),
             next_joint: 1,
             anchor: None,
+            effectors: BTreeMap::new(),
+            next_effector: 1,
         }
     }
 
     fn step(&mut self, seconds: f32) {
         self.physics.integration_parameters.dt = seconds;
-        self.physics.step();
+        let index = self.prepare_effectors();
+        let grouped = self.grouped_platforms(&index);
+        let hooks = EffectorHooks { index: &index, effectors: &self.effectors, grouped: &grouped };
+        self.physics.step_with_events(&hooks, &());
         self.dirty.clear();
         for entry in self.bodies.values() {
             if let Some(body) = self.physics.bodies.get_mut(entry.handle) {
                 body.reset_forces(false);
                 body.reset_torques(false);
+            }
+        }
+
+        if !self.effectors.is_empty() {
+            let actions = self.effector_actions(&index, seconds);
+            self.apply_effector_actions(actions);
+        }
+    }
+
+    fn effector_collider(&self, entry: &EffectorEntry, index: u32) -> Option<ColliderHandle> {
+        if entry.body == 0 {
+            self.statics.get(index as usize).and_then(|slot| slot.handle)
+        } else {
+            self.collider_of(entry.body, index)
+        }
+    }
+
+    fn prepare_effectors(&mut self) -> BTreeMap<(u32, u32), u32> {
+        let mut index = BTreeMap::new();
+        let mut masked = Vec::new();
+        for (id, entry) in &self.effectors {
+            for collider in &entry.colliders {
+                if let Some(handle) = self.effector_collider(entry, *collider) {
+                    index.insert(handle.into_raw_parts(), *id);
+                    masked.push((handle, entry.recipe));
+                }
+            }
+        }
+
+        for (handle, recipe) in masked {
+            if let Some(collider) = self.physics.colliders.get_mut(handle) {
+                if uses_contact_hooks(&recipe) && !collider.active_hooks().contains(ActiveHooks::MODIFY_SOLVER_CONTACTS) {
+                    collider.set_active_hooks(collider.active_hooks() | ActiveHooks::MODIFY_SOLVER_CONTACTS);
+                }
+
+                if recipe.use_collider_mask != 0 {
+                    let groups = collider.collision_groups();
+                    if groups.filter.bits() != recipe.collider_mask {
+                        collider.set_collision_groups(InteractionGroups::new(groups.memberships, Group::from_bits_truncate(recipe.collider_mask), InteractionTestMode::And));
+                    }
+                }
+            }
+        }
+
+        index
+    }
+
+    fn restore_groups(&mut self, entry: &EffectorEntry) {
+        for collider in &entry.colliders {
+            if let Some(handle) = self.effector_collider(entry, *collider) {
+                if let Some(found) = self.physics.colliders.get_mut(handle) {
+                    let groups = found.collision_groups();
+                    let layer = groups.memberships.bits().trailing_zeros().min(31) as usize;
+                    found.set_collision_groups(InteractionGroups::new(groups.memberships, Group::from_bits_truncate(self.layers[layer]), InteractionTestMode::And));
+                }
+            }
+        }
+    }
+
+    fn grouped_platforms(&self, index: &BTreeMap<(u32, u32), u32>) -> BTreeSet<(u32, u32)> {
+        let mut grouped = BTreeSet::new();
+        for ((raw, generation), id) in index {
+            let recipe = match self.effectors.get(id) {
+                Some(entry) => entry.recipe,
+                None => continue,
+            };
+            if recipe.kind != EFFECTOR_PLATFORM || recipe.one_way == 0 || recipe.one_way_grouping == 0 {
+                continue;
+            }
+
+            let handle = ColliderHandle::from_raw_parts(*raw, *generation);
+            for pair in self.physics.narrow_phase.contact_pairs_with(handle) {
+                if pair.manifolds().iter().any(|manifold| manifold.data.user_data == CONTACT_FORBIDDEN) {
+                    let other = if pair.collider1 == handle { pair.collider2 } else { pair.collider1 };
+                    grouped.insert((*id, self.owner_of(other)));
+                }
+            }
+        }
+
+        grouped
+    }
+
+    fn touching_pairs(&self, handle: ColliderHandle) -> Vec<ColliderHandle> {
+        let narrow = &self.physics.narrow_phase;
+        let mut found = Vec::new();
+        if self.physics.colliders.get(handle).is_some_and(|collider| collider.is_sensor()) {
+            for (first, second, intersecting) in narrow.intersection_pairs_with(handle) {
+                if intersecting {
+                    found.push(if first == handle { second } else { first });
+                }
+            }
+        } else {
+            for pair in narrow.contact_pairs_with(handle) {
+                if pair.has_any_active_contact() {
+                    found.push(if pair.collider1 == handle { pair.collider2 } else { pair.collider1 });
+                }
+            }
+
+            for (first, second, intersecting) in narrow.intersection_pairs_with(handle) {
+                if intersecting {
+                    found.push(if first == handle { second } else { first });
+                }
+            }
+        }
+
+        found
+    }
+
+    fn dynamic_parent(&self, collider: ColliderHandle) -> Option<(RigidBodyHandle, &RigidBody, &Collider)> {
+        let found = self.physics.colliders.get(collider)?;
+        let parent = found.parent()?;
+        let body = self.physics.bodies.get(parent)?;
+        if body.is_dynamic() && body.user_data != 0 {
+            Some((parent, body, found))
+        } else {
+            None
+        }
+    }
+
+    fn owner_frame(&self, entry: &EffectorEntry) -> (Pose, Option<&RigidBody>) {
+        match self.bodies.get(&entry.body).and_then(|found| self.physics.bodies.get(found.handle)) {
+            Some(body) => (*body.position(), Some(body)),
+            None => (Pose::IDENTITY, None),
+        }
+    }
+
+    fn effector_actions(&self, index: &BTreeMap<(u32, u32), u32>, seconds: f32) -> Vec<EffectorAction> {
+        let mut actions = Vec::new();
+        for (id, entry) in &self.effectors {
+            let recipe = &entry.recipe;
+            if recipe.kind == EFFECTOR_PLATFORM {
+                continue;
+            }
+
+            let (frame, owner) = self.owner_frame(entry);
+            let owner_angle = frame.rotation.angle();
+            let mut targets: Vec<(u32, u64, RigidBodyHandle, ColliderHandle, ColliderHandle)> = Vec::new();
+            let mut seen: BTreeSet<(u32, u32)> = BTreeSet::new();
+            let level = (frame * (Vector::new(recipe.origin[0], recipe.origin[1]) + Rotation::new(recipe.rotation) * Vector::new(0.0, recipe.surface_level))).y;
+            let shared = entry.colliders.len() > 1;
+            for collider in &entry.colliders {
+                let handle = match self.effector_collider(entry, *collider) {
+                    Some(handle) if index.get(&handle.into_raw_parts()) == Some(id) => handle,
+                    _ => continue,
+                };
+                if recipe.kind == EFFECTOR_SURFACE {
+                    self.surface_actions(handle, recipe, &mut actions);
+                    continue;
+                }
+
+                for other in self.touching_pairs(handle) {
+                    let (parent, body, other_collider) = match self.dynamic_parent(other) {
+                        Some(found) => found,
+                        None => continue,
+                    };
+                    let body_id = body.user_data as u32;
+                    match recipe.kind {
+                        EFFECTOR_AREA | EFFECTOR_POINT => targets.push((body_id, (other_collider.user_data >> 32) as u64, parent, other, handle)),
+                        EFFECTOR_BUOYANCY => {
+                            if shared && !seen.insert(other.into_raw_parts()) {
+                                continue;
+                            }
+
+                            if let Some((area, centroid)) = submerged(other_collider.shape(), other_collider.position(), level) {
+                                let gravity = self.physics.gravity * body.gravity_scale();
+                                let lever = centroid - body.center_of_mass();
+                                let point_velocity = body.linvel() + Vector::new(-body.angvel() * lever.y, body.angvel() * lever.x);
+                                let force = -gravity * (recipe.density * area) - point_velocity * (recipe.linear_damping * area) + direction(recipe.flow_angle) * (recipe.flow_magnitude * area);
+                                actions.push(EffectorAction::Force(parent, force, Some(centroid)));
+                                if recipe.angular_damping > 0.0 {
+                                    actions.push(EffectorAction::Torque(parent, -recipe.angular_damping * area * body.angvel()));
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            targets.sort_by_key(|(body_id, order, _, _, _)| (*body_id, *order));
+            targets.dedup_by_key(|(body_id, _, _, _, _)| *body_id);
+            for (_, _, parent, target_collider, effector_collider) in targets {
+                let body = match self.physics.bodies.get(parent) {
+                    Some(body) => body,
+                    None => continue,
+                };
+                let target_point = match recipe.force_target {
+                    SELECT_COLLIDER => self.physics.colliders.get(target_collider).map(|found| found.position() * found.mass_properties().local_com),
+                    _ => None,
+                };
+                if recipe.linear_damping > 0.0 || recipe.angular_damping > 0.0 {
+                    actions.push(EffectorAction::Damp(parent, 1.0 / (1.0 + seconds * recipe.linear_damping), 1.0 / (1.0 + seconds * recipe.angular_damping)));
+                }
+
+                let force = if recipe.kind == EFFECTOR_AREA {
+                    let angle = if recipe.global_angle != 0 { recipe.force_angle } else { owner_angle + recipe.rotation + recipe.force_angle };
+                    direction(angle) * recipe.force_magnitude
+                } else {
+                    let source = match recipe.force_source {
+                        SELECT_COLLIDER => match self.physics.colliders.get(effector_collider) {
+                            Some(found) => found.position() * found.mass_properties().local_com,
+                            None => continue,
+                        },
+                        _ => match owner {
+                            Some(owner) if owner.is_dynamic() => owner.center_of_mass(),
+                            Some(owner) => owner.translation(),
+                            None => Vector::new(recipe.origin[0], recipe.origin[1]),
+                        },
+                    };
+                    let delta = target_point.unwrap_or(body.center_of_mass()) - source;
+                    let distance = delta.length();
+                    if distance <= 0.0 {
+                        continue;
+                    }
+
+                    delta * (recipe.force_magnitude * falloff(recipe.force_mode, distance * recipe.distance_scale) / distance)
+                };
+                actions.push(EffectorAction::Force(parent, force, target_point));
+            }
+        }
+
+        actions
+    }
+
+    fn surface_actions(&self, handle: ColliderHandle, recipe: &FrEffector2D, actions: &mut Vec<EffectorAction>) {
+        for pair in self.physics.narrow_phase.contact_pairs_with(handle) {
+            if !pair.has_any_active_contact() {
+                continue;
+            }
+
+            let other = if pair.collider1 == handle { pair.collider2 } else { pair.collider1 };
+            let (parent, body, _) = match self.dynamic_parent(other) {
+                Some(found) => found,
+                None => continue,
+            };
+            let manifold = match pair.manifolds().iter().find(|manifold| !manifold.data.solver_contacts.is_empty()) {
+                Some(manifold) => manifold,
+                None => continue,
+            };
+            let normal = if pair.collider1 == handle { manifold.data.normal } else { -manifold.data.normal };
+            let tangent = Vector::new(normal.y, -normal.x);
+            let change = recipe.force_scale * (recipe.speed - body.linvel().dot(tangent));
+            if recipe.contact_force != 0 {
+                let first = match self.physics.colliders.get(pair.collider1) {
+                    Some(first) => first,
+                    None => continue,
+                };
+                if manifold.points.is_empty() {
+                    continue;
+                }
+
+                let pose1 = manifold.subshape_pos1().map_or(*first.position(), |sub| *first.position() * *sub);
+                let mut point = Vector::ZERO;
+                for contact in manifold.points.iter() {
+                    point += pose1 * contact.local_p1;
+                }
+
+                point /= manifold.points.len() as f32;
+                actions.push(EffectorAction::Impulse(parent, tangent * (change * body.mass()), point));
+            } else {
+                actions.push(EffectorAction::Velocity(parent, tangent * change));
+            }
+        }
+    }
+
+    fn apply_effector_actions(&mut self, actions: Vec<EffectorAction>) {
+        for action in actions {
+            match action {
+                EffectorAction::Damp(handle, linear, angular) => {
+                    if let Some(body) = self.physics.bodies.get_mut(handle) {
+                        let velocity = body.linvel() * linear;
+                        let spin = body.angvel() * angular;
+                        body.set_linvel(velocity, true);
+                        body.set_angvel(spin, true);
+                    }
+                }
+                EffectorAction::Force(handle, force, point) => {
+                    if let Some(body) = self.physics.bodies.get_mut(handle) {
+                        match point {
+                            Some(point) => body.add_force_at_point(force, point, true),
+                            None => body.add_force(force, true),
+                        }
+                    }
+                }
+                EffectorAction::Torque(handle, torque) => {
+                    if let Some(body) = self.physics.bodies.get_mut(handle) {
+                        body.add_torque(torque, true);
+                    }
+                }
+                EffectorAction::Velocity(handle, change) => {
+                    if let Some(body) = self.physics.bodies.get_mut(handle) {
+                        let velocity = body.linvel() + change;
+                        body.set_linvel(velocity, true);
+                    }
+                }
+                EffectorAction::Impulse(handle, impulse, point) => {
+                    if let Some(body) = self.physics.bodies.get_mut(handle) {
+                        body.apply_impulse_at_point(impulse, point, true);
+                    }
+                }
+            }
+        }
+    }
+
+    fn effector_slots(&self, group: u32, colliders: &[u32]) -> Option<Vec<u32>> {
+        let slots: Vec<u32> = self.statics.iter().enumerate().filter(|(_, slot)| slot.group == group && slot.handle.is_some()).map(|(index, _)| index as u32).collect();
+        colliders.iter().map(|index| slots.get(*index as usize).copied()).collect()
+    }
+
+    fn add_effector(&mut self, body: u32, group: u32, colliders: &[u32], recipe: FrEffector2D) -> u32 {
+        if !valid_effector(&recipe) || colliders.is_empty() || (body == 0) == (group == 0) {
+            return 0;
+        }
+
+        let resolved = if body != 0 {
+            let count = match self.bodies.get(&body) {
+                Some(entry) => entry.recipe.colliders.len() as u32,
+                None => return 0,
+            };
+            if colliders.iter().any(|index| *index >= count) {
+                return 0;
+            }
+
+            colliders.to_vec()
+        } else {
+            match self.effector_slots(group, colliders) {
+                Some(slots) => slots,
+                None => return 0,
+            }
+        };
+        let unique: BTreeSet<u32> = resolved.iter().copied().collect();
+        if unique.len() != resolved.len() {
+            return 0;
+        }
+
+        let taken = self.effectors.values().any(|entry| entry.body == body && entry.colliders.iter().any(|index| unique.contains(index)));
+        if taken {
+            return 0;
+        }
+
+        let id = self.next_effector;
+        self.next_effector += 1;
+        self.effectors.insert(id, EffectorEntry { body, group, colliders: resolved, recipe });
+        id
+    }
+
+    fn remove_effector(&mut self, id: u32) -> bool {
+        match self.effectors.remove(&id) {
+            Some(entry) => {
+                if entry.recipe.use_collider_mask != 0 {
+                    self.restore_groups(&entry);
+                }
+
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn set_effector(&mut self, id: u32, recipe: FrEffector2D) -> bool {
+        if !valid_effector(&recipe) {
+            return false;
+        }
+
+        let entry = match self.effectors.get(&id) {
+            Some(entry) => entry.clone(),
+            None => return false,
+        };
+        if entry.recipe.use_collider_mask != 0 && recipe.use_collider_mask == 0 {
+            self.restore_groups(&entry);
+        }
+
+        if let Some(found) = self.effectors.get_mut(&id) {
+            found.recipe = recipe;
+        }
+
+        true
+    }
+
+    fn restore_effectors(&mut self, saved: Vec<(u32, EffectorEntry)>) {
+        let saved: BTreeMap<u32, EffectorEntry> = saved.into_iter().collect();
+        for (id, entry) in &saved {
+            if !self.effectors.contains_key(id) && entry.recipe.use_collider_mask != 0 {
+                self.restore_groups(entry);
+            }
+        }
+
+        let current: Vec<u32> = self.effectors.keys().copied().collect();
+        for id in current {
+            let saved_recipe = saved.get(&id).map(|entry| entry.recipe);
+            let previous = self.effectors.get(&id).map(|entry| entry.clone());
+            if let (Some(recipe), Some(previous)) = (saved_recipe, previous) {
+                if previous.recipe.use_collider_mask == 0 || recipe.use_collider_mask == 0 {
+                    self.restore_groups(&previous);
+                }
+
+                if let Some(found) = self.effectors.get_mut(&id) {
+                    found.recipe = recipe;
+                }
             }
         }
     }
@@ -277,6 +790,7 @@ impl World2D {
             self.physics.remove_collider(*handle);
         }
 
+        self.effectors.retain(|_, entry| entry.group != group);
         !removed.is_empty()
     }
 
@@ -371,6 +885,7 @@ impl World2D {
             Some(entry) => {
                 self.physics.remove_body(entry.handle);
                 self.joints.retain(|_, joint| joint.body1 != id && joint.body2 != id);
+                self.effectors.retain(|_, effector| effector.body != id);
                 true
             }
             None => false,
@@ -513,20 +1028,53 @@ impl World2D {
         self.sync_dirty();
 
         let layer_mask = filter.layer_mask;
-        let predicate = move |_: ColliderHandle, collider: &Collider| {
-            collider.collision_groups().memberships.bits() & layer_mask != 0 && (excluded.is_none() || collider.parent() != excluded)
+        let platforms = self.one_way_platforms();
+        let mut passed: BTreeSet<(u32, u32)> = platforms
+            .iter()
+            .filter(|(platform, _)| {
+                self.physics.colliders.get(*platform).is_some_and(|collider| {
+                    query::intersection_test(&character_pose, &*shape, collider.position(), collider.shape()).is_ok_and(|found| found.intersecting)
+                })
+            })
+            .map(|(platform, _)| platform.into_raw_parts())
+            .collect();
+        let (movement, collisions) = loop {
+            let skipped = passed.clone();
+            let predicate = move |collider_handle: ColliderHandle, collider: &Collider| {
+                collider.collision_groups().memberships.bits() & layer_mask != 0
+                    && (excluded.is_none() || collider.parent() != excluded)
+                    && !skipped.contains(&collider_handle.into_raw_parts())
+            };
+            let query_filter = QueryFilter::new().exclude_sensors().exclude_rigid_body(handle).groups(groups).predicate(&predicate);
+            let mut collisions = Vec::new();
+            let movement = {
+                let pipeline = self.physics.broad_phase.as_query_pipeline(
+                    self.physics.narrow_phase.query_dispatcher(),
+                    &self.physics.bodies,
+                    &self.physics.colliders,
+                    query_filter,
+                );
+                controller.move_shape(seconds, &pipeline, &*shape, &character_pose, desired, |collision| collisions.push(collision))
+            };
+            let crossed = collisions.iter().find_map(|collision: &CharacterCollision| {
+                platforms
+                    .iter()
+                    .find(|(platform, _)| *platform == collision.handle)
+                    .filter(|(_, (up, arc))| !within_arc(collision.hit.normal1, *up, *arc))
+                    .map(|(platform, _)| platform.into_raw_parts())
+            });
+            match crossed {
+                Some(platform) if passed.insert(platform) => continue,
+                _ => break (movement, collisions),
+            }
+        };
+        let skipped = passed;
+        let predicate = move |collider_handle: ColliderHandle, collider: &Collider| {
+            collider.collision_groups().memberships.bits() & layer_mask != 0
+                && (excluded.is_none() || collider.parent() != excluded)
+                && !skipped.contains(&collider_handle.into_raw_parts())
         };
         let query_filter = QueryFilter::new().exclude_sensors().exclude_rigid_body(handle).groups(groups).predicate(&predicate);
-        let mut collisions = Vec::new();
-        let movement = {
-            let pipeline = self.physics.broad_phase.as_query_pipeline(
-                self.physics.narrow_phase.query_dispatcher(),
-                &self.physics.bodies,
-                &self.physics.colliders,
-                query_filter,
-            );
-            controller.move_shape(seconds, &pipeline, &*shape, &character_pose, desired, |collision| collisions.push(collision))
-        };
 
         let sliding = movement.translation.dot(controller.up) < 0.0
             && collisions.iter().any(|collision| slides_on(collision.hit.normal1.dot(controller.up), settings.min_slope_slide_angle));
@@ -548,6 +1096,26 @@ impl World2D {
             grounded: movement.grounded as u32,
             sliding: sliding as u32,
         })
+    }
+
+    fn one_way_platforms(&self) -> Vec<(ColliderHandle, (Vector, f32))> {
+        let mut found = Vec::new();
+        for entry in self.effectors.values() {
+            let recipe = &entry.recipe;
+            if recipe.kind != EFFECTOR_PLATFORM || recipe.one_way == 0 {
+                continue;
+            }
+
+            let owner_angle = self.owner_frame(entry).0.rotation.angle();
+            let up = up_of(owner_angle + recipe.rotation + recipe.rotational_offset);
+            for collider in &entry.colliders {
+                if let Some(handle) = self.effector_collider(entry, *collider) {
+                    found.push((handle, (up, recipe.surface_arc)));
+                }
+            }
+        }
+
+        found
     }
 
     fn body(&self, id: u32) -> Option<&RigidBody> {
@@ -638,7 +1206,8 @@ impl World2D {
             })
             .collect();
         let anchor = self.anchor.map(|handle| handle.into_raw_parts());
-        let snapshot = SnapshotRef { format: SNAPSHOT_FORMAT, world: &self.physics, handles, statics, dirty, joints, anchor };
+        let effectors = self.effectors.iter().map(|(id, entry)| (*id, entry)).collect();
+        let snapshot = SnapshotRef { format: SNAPSHOT_FORMAT, world: &self.physics, handles, statics, dirty, joints, anchor, effectors };
         self.scratch = bincode::serialize(&snapshot).unwrap_or_default();
         self.scratch.len()
     }
@@ -703,6 +1272,7 @@ impl World2D {
         }
 
         self.restore_joints(snapshot.joints);
+        self.restore_effectors(snapshot.effectors);
         true
     }
 
@@ -1287,6 +1857,40 @@ pub unsafe extern "C" fn fr2_joint_contains(world_ptr: *mut World2D, joint: u32)
 pub unsafe extern "C" fn fr2_joint_set(world_ptr: *mut World2D, joint: u32, recipe: *const FrJoint2D) -> bool {
     match (world(world_ptr), recipe.as_ref()) {
         (Some(world), Some(recipe)) => world.set_joint(joint, *recipe),
+        _ => false,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fr2_effector_add(world_ptr: *mut World2D, body: u32, colliders: *const u32, count: u32, effector: *const FrEffector2D) -> u32 {
+    match (world(world_ptr), effector.as_ref(), colliders.is_null() || count == 0) {
+        (Some(world), Some(effector), false) => world.add_effector(body, 0, slice::from_raw_parts(colliders, count as usize), *effector),
+        _ => 0,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fr2_effector_add_static(world_ptr: *mut World2D, group: u32, colliders: *const u32, count: u32, effector: *const FrEffector2D) -> u32 {
+    match (world(world_ptr), effector.as_ref(), colliders.is_null() || count == 0) {
+        (Some(world), Some(effector), false) => world.add_effector(0, group, slice::from_raw_parts(colliders, count as usize), *effector),
+        _ => 0,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fr2_effector_remove(world_ptr: *mut World2D, effector: u32) -> bool {
+    world(world_ptr).map_or(false, |world| world.remove_effector(effector))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fr2_effector_contains(world_ptr: *mut World2D, effector: u32) -> bool {
+    world(world_ptr).map_or(false, |world| world.effectors.contains_key(&effector))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fr2_effector_set(world_ptr: *mut World2D, effector: u32, recipe: *const FrEffector2D) -> bool {
+    match (world(world_ptr), recipe.as_ref()) {
+        (Some(world), Some(recipe)) => world.set_effector(effector, *recipe),
         _ => false,
     }
 }

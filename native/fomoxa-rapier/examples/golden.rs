@@ -17,6 +17,9 @@ const CHARACTER_STEPS: u32 = 120;
 const CHARACTER_SNAPSHOT_AT: u32 = 60;
 const CHARACTER_LAYER: u32 = 1;
 const SKIPPED_LAYER: u32 = 2;
+const EFFECTOR_STEPS: u32 = 120;
+const EFFECTOR_SNAPSHOT_AT: u32 = 60;
+const EFFECTOR_RETUNE_AT: u32 = 70;
 const ALL: FrQueryFilter = FrQueryFilter { layer_mask: u32::MAX, exclude_body: 0, include_triggers: 1 };
 
 fn collider(shape: u32, half_extents: [f32; 3], radius: f32, half_height: f32, points: &[f32], triangles: &[u32]) -> FrCollider {
@@ -685,6 +688,77 @@ unsafe fn run_2d() {
     fr2_world_destroy(world);
     joints_2d();
     character_2d();
+    effectors_2d();
+}
+
+fn wind(force_magnitude: f32) -> FrEffector2D {
+    FrEffector2D { kind: 3, origin: [6.0, 3.0], global_angle: 1, force_magnitude, ..Default::default() }
+}
+
+unsafe fn effector_tick_2d(world: *mut World2D, gust: u32, tick: u32) {
+    if tick == EFFECTOR_RETUNE_AT {
+        assert!(fr2_effector_set(world, gust, &wind(-8.0)));
+    }
+
+    fr2_world_step(world, SECONDS);
+}
+
+unsafe fn effectors_2d() {
+    let world = fr2_world_create(0.0, -9.81);
+    let mut shapes = [
+        collider_2d(0, [20.0, 0.5], 0.0, 0.0, &[]),
+        collider_2d(0, [1.5, 0.1], 0.0, 0.0, &[]),
+        collider_2d(0, [2.0, 2.0], 0.0, 0.0, &[]),
+        collider_2d(0, [3.0, 1.5], 0.0, 0.0, &[]),
+    ];
+    shapes[0].position = [0.0, -0.5];
+    shapes[1].position = [-6.0, 2.0];
+    shapes[2].position = [6.0, 3.0];
+    shapes[2].is_trigger = 1;
+    shapes[3].position = [-12.0, 1.5];
+    shapes[3].is_trigger = 1;
+    let mut first = 0;
+    let group = fr2_world_add_static(world, shapes.as_ptr(), shapes.len() as u32, &mut first);
+    let belt = FrEffector2D { kind: 2, speed: 2.0, force_scale: 0.5, friction: 1, bounce: 1, ..Default::default() };
+    let platform = FrEffector2D { kind: 1, origin: [-6.0, 2.0], one_way: 1, surface_arc: std::f32::consts::PI, side_friction: 1, side_bounce: 1, ..Default::default() };
+    let fluid = FrEffector2D { kind: 4, origin: [-12.0, 1.5], surface_level: 1.5, density: 2.0, linear_damping: 1.0, angular_damping: 1.0, flow_magnitude: 1.0, ..Default::default() };
+    assert!(fr2_effector_add_static(world, group, [0u32].as_ptr(), 1, &belt) != 0);
+    assert!(fr2_effector_add_static(world, group, [1u32].as_ptr(), 1, &platform) != 0);
+    let gust = fr2_effector_add_static(world, group, [2u32].as_ptr(), 1, &wind(8.0));
+    assert!(fr2_effector_add_static(world, group, [3u32].as_ptr(), 1, &fluid) != 0);
+
+    let mut zone = collider_2d(1, [0.0; 2], 3.0, 0.0, &[]);
+    zone.is_trigger = 1;
+    let magnet = fr2_body_create(world, 1, 12.0, 6.0, 0.0, 1.0, 0, 1.0, 0.0, 0.0, false, &zone, 1);
+    let pull = FrEffector2D { kind: 5, force_magnitude: -12.0, distance_scale: 1.0, force_mode: 1, ..Default::default() };
+    assert!(fr2_effector_add(world, magnet, [0u32].as_ptr(), 1, &pull) != 0);
+
+    let crate_box = fr2_body_create(world, 0, -1.0, 0.4, 0.0, 1.0, 0, 1.0, 0.0, 0.0, false, &collider_2d(0, [0.4, 0.4], 0.0, 0.0, &[]), 1);
+    let jumper = fr2_body_create(world, 0, -7.0, 0.3, 0.0, 1.0, 0, 1.0, 0.0, 0.0, false, &collider_2d(0, [0.3, 0.3], 0.0, 0.0, &[]), 1);
+    assert!(fr2_body_set(world, jumper, &FrBodyState2D { position: [-7.0, 0.3], velocity: [0.0, 9.0], ..Default::default() }));
+    fr2_body_create(world, 0, 5.0, 3.0, 0.0, 1.0, 0, 1.0, 0.0, 0.0, false, &collider_2d(1, [0.0; 2], 0.3, 0.0, &[]), 1);
+    fr2_body_create(world, 0, -12.0, 3.5, 0.0, 1.0, 0, 1.0, 0.0, 0.0, false, &collider_2d(0, [0.5, 0.5], 0.0, 0.0, &[]), 1);
+    fr2_body_create(world, 0, 10.0, 6.0, 0.0, 1.0, 0, 0.0, 0.0, 0.0, false, &collider_2d(1, [0.0; 2], 0.25, 0.0, &[]), 1);
+
+    let mut saved = Vec::new();
+    let mut at_snapshot = 0;
+    for tick in 1..=EFFECTOR_STEPS {
+        effector_tick_2d(world, gust, tick);
+        if tick == EFFECTOR_SNAPSHOT_AT {
+            at_snapshot = fr2_world_hash(world);
+            saved = snapshot_2d(world);
+        }
+    }
+
+    let at_end = fr2_world_hash(world);
+    println!("2d effectors {:016x} {:016x} {:08x} {:08x}", at_snapshot, at_end, position_2d(world, crate_box)[0].to_bits(), position_2d(world, jumper)[1].to_bits());
+    assert!(fr2_world_load(world, saved.as_ptr(), saved.len() as u32));
+    for tick in EFFECTOR_SNAPSHOT_AT + 1..=EFFECTOR_STEPS {
+        effector_tick_2d(world, gust, tick);
+    }
+
+    println!("2d effectors replay {}", fr2_world_hash(world) == at_end);
+    fr2_world_destroy(world);
 }
 
 unsafe fn joints_2d() {

@@ -73,6 +73,22 @@ namespace Fomoxa.Networking.Rapier
 
         public void Step(float seconds) => RapierNative.fr2_world_step(world, seconds);
 
+        private static uint[] Indices(IReadOnlyList<int> colliders)
+        {
+            if (colliders == null)
+            {
+                throw new ArgumentNullException(nameof(colliders));
+            }
+
+            var indices = new uint[colliders.Count];
+            for (int index = 0; index < indices.Length; index++)
+            {
+                indices[index] = colliders[index] >= 0 ? (uint)colliders[index] : throw new ArgumentOutOfRangeException(nameof(colliders), colliders[index], "a collider index is not negative");
+            }
+
+            return indices;
+        }
+
         public PhysicsSnapshot CreateSnapshot() => new RapierSnapshot();
 
         public void Save(PhysicsSnapshot into)
@@ -136,6 +152,40 @@ namespace Fomoxa.Networking.Rapier
             if (!joint.IsValid || !RapierNative.fr2_joint_set(world, (uint)joint.Value, RapierNative.Joint2D.Of(desc)))
             {
                 throw new ArgumentException($"joint {joint.Value} is not in this world, or Rapier refused the description", nameof(joint));
+            }
+        }
+
+        public EffectorHandle AddEffector(BodyHandle body, IReadOnlyList<int> colliders, in EffectorDesc2D desc)
+        {
+            uint id = RapierNative.fr2_effector_add(world, Id(body), Indices(colliders), (uint)colliders.Count, RapierNative.Effector2D.Of(desc));
+            if (id == 0)
+            {
+                throw new ArgumentException("Rapier refused the effector (body missing, no colliders, a collider index out of range, repeated or already under an effector, an unknown kind or a value that is not finite, or a disposed world)", nameof(desc));
+            }
+
+            return new EffectorHandle((int)id);
+        }
+
+        public EffectorHandle AddEffector(StaticGroup group, IReadOnlyList<int> colliders, in EffectorDesc2D desc)
+        {
+            uint id = RapierNative.fr2_effector_add_static(world, (uint)group.Id, Indices(colliders), (uint)colliders.Count, RapierNative.Effector2D.Of(desc));
+            if (id == 0)
+            {
+                throw new ArgumentException("Rapier refused the effector (group missing, no colliders, a collider index out of range, repeated or already under an effector, an unknown kind or a value that is not finite, or a disposed world)", nameof(desc));
+            }
+
+            return new EffectorHandle((int)id);
+        }
+
+        public bool RemoveEffector(EffectorHandle effector) => effector.IsValid && RapierNative.fr2_effector_remove(world, (uint)effector.Value);
+
+        public bool Contains(EffectorHandle effector) => effector.IsValid && RapierNative.fr2_effector_contains(world, (uint)effector.Value);
+
+        public void SetEffector(EffectorHandle effector, in EffectorDesc2D desc)
+        {
+            if (!effector.IsValid || !RapierNative.fr2_effector_set(world, (uint)effector.Value, RapierNative.Effector2D.Of(desc)))
+            {
+                throw new ArgumentException($"effector {effector.Value} is not in this world, or Rapier refused the description", nameof(effector));
             }
         }
 

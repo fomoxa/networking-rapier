@@ -30,6 +30,7 @@ namespace Fomoxa.Unity.Rapier
         private readonly List<Joint> partJoints = new List<Joint>();
         private readonly List<Joint2D> partJoints2D = new List<Joint2D>();
         private readonly List<string> ignored = new List<string>();
+        private readonly List<(Effector2D Effector, List<int> Colliders)> partEffectors = new List<(Effector2D Effector, List<int> Colliders)>();
         private NetworkManager manager;
         private RapierScenes scenes;
         private RapierContacts contacts;
@@ -312,6 +313,7 @@ namespace Fomoxa.Unity.Rapier
 
             StaticGroup group = Begun().AddStatic2D(sceneId, colliders);
             contacts.AddGroup2D(group, scenes.WorldOf2D(sceneId), sources, root);
+            AddEffectors(sources, null, (indices, desc) => scenes.AddEffector(group, indices, desc));
             return group;
         }
 
@@ -404,7 +406,15 @@ namespace Fomoxa.Unity.Rapier
                 try
                 {
                     SceneFile file = SceneFileFormat.Read(manager.Registry, bytes);
-                    scenes.LoadScene(file);
+                    scenes.LoadScene(new SceneFile
+                    {
+                        SceneId = file.SceneId,
+                        Colliders = file.Colliders,
+                        Colliders2D = file.Colliders2D,
+                        LayerCollisions = file.LayerCollisions,
+                        LayerCollisions2D = file.LayerCollisions2D,
+                        Effectors2D = file.Effectors2D,
+                    });
                     loadedScenes.Add(sceneId);
                     contacts.LoadScene(scene, sceneId, Has(scenes.SceneIds, sceneId) ? scenes.WorldOf(sceneId) : null, file.Colliders.Count, Has(scenes.SceneIds2D, sceneId) ? scenes.WorldOf2D(sceneId) : null, file.Colliders2D.Count);
                 }
@@ -601,6 +611,49 @@ namespace Fomoxa.Unity.Rapier
             found.Parts.Add(part);
             found.Bodies2D.Add(part.Body2D);
             contacts.AddBody2D(networkObject, found.World2D, part.Body2D.Handle, sources);
+            AddEffectors(sources, part.Transform, (indices, desc) => scenes.AddEffector(networkObject, part.Body2D, indices, desc));
+        }
+
+        private void AddEffectors(List<Collider2D> sources, Transform owner, Func<List<int>, EffectorDesc2D, EffectorHandle> add)
+        {
+            partEffectors.Clear();
+            for (int index = 0; index < sources.Count; index++)
+            {
+                if (!EffectorDescriptions.TryFind(sources[index], out Effector2D effector))
+                {
+                    continue;
+                }
+
+                int entry = partEffectors.FindIndex(candidate => candidate.Effector == effector);
+                if (entry < 0)
+                {
+                    partEffectors.Add((effector, new List<int>()));
+                    entry = partEffectors.Count - 1;
+                }
+
+                partEffectors[entry].Colliders.Add(index);
+            }
+
+            foreach ((Effector2D effector, List<int> colliders) in partEffectors)
+            {
+                ignored.Clear();
+                try
+                {
+                    add(colliders, RapierEffectors.FromFile(EffectorDescriptions.Describe(effector, owner, ignored)));
+                }
+                catch (Exception exception) when (exception is NotSupportedException || exception is ArgumentException)
+                {
+                    Debug.LogException(exception, effector);
+                    continue;
+                }
+
+                if (ignored.Count > 0)
+                {
+                    Debug.LogWarning($"{effector.GetType().Name} on {effector.name}: Rapier does not simulate {string.Join(", ", ignored)}, so they count as 0", effector);
+                }
+            }
+
+            partEffectors.Clear();
         }
 
         private void AddJoints(NetworkObject networkObject, Bound found)

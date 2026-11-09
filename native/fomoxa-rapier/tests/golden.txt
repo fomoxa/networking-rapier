@@ -42,3 +42,5 @@
 2d joints load true false
 2d character ff8efed6b304c5ee e2102337f2f33c13 41253723 120
 2d character replay true
+2d effectors 4f4b2b449e644320 d352f19f802db796 40b3b1b8 40199833
+2d effectors replay true

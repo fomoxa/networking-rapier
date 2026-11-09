@@ -263,6 +263,77 @@ namespace Fomoxa.Networking.Rapier
         }
 
         [StructLayout(LayoutKind.Sequential)]
+        internal struct Effector2D
+        {
+            public uint Kind;
+            public uint UseColliderMask;
+            public uint ColliderMask;
+            public float Rotation;
+            public float OriginX;
+            public float OriginY;
+            public uint OneWay;
+            public uint OneWayGrouping;
+            public float RotationalOffset;
+            public float SurfaceArc;
+            public uint SideFriction;
+            public uint SideBounce;
+            public float SideArc;
+            public float Speed;
+            public float ForceScale;
+            public uint ContactForce;
+            public uint Friction;
+            public uint Bounce;
+            public float ForceAngle;
+            public uint GlobalAngle;
+            public float ForceMagnitude;
+            public uint ForceSource;
+            public uint ForceTarget;
+            public uint ForceMode;
+            public float DistanceScale;
+            public float LinearDamping;
+            public float AngularDamping;
+            public float Density;
+            public float SurfaceLevel;
+            public float FlowAngle;
+            public float FlowMagnitude;
+
+            public static Effector2D Of(in EffectorDesc2D desc) => new Effector2D
+            {
+                Kind = (uint)desc.Kind,
+                UseColliderMask = desc.ColliderMask.HasValue ? 1u : 0u,
+                ColliderMask = desc.ColliderMask ?? 0u,
+                Rotation = desc.Rotation,
+                OriginX = desc.Origin.X,
+                OriginY = desc.Origin.Y,
+                OneWay = desc.OneWay ? 1u : 0u,
+                OneWayGrouping = desc.OneWayGrouping ? 1u : 0u,
+                RotationalOffset = desc.RotationalOffset,
+                SurfaceArc = desc.SurfaceArc,
+                SideFriction = desc.SideFriction ? 1u : 0u,
+                SideBounce = desc.SideBounce ? 1u : 0u,
+                SideArc = desc.SideArc,
+                Speed = desc.Speed,
+                ForceScale = desc.ForceScale,
+                ContactForce = desc.ContactForce ? 1u : 0u,
+                Friction = desc.Friction ? 1u : 0u,
+                Bounce = desc.Bounce ? 1u : 0u,
+                ForceAngle = desc.ForceAngle,
+                GlobalAngle = desc.GlobalAngle ? 1u : 0u,
+                ForceMagnitude = desc.ForceMagnitude,
+                ForceSource = (uint)desc.ForceSource,
+                ForceTarget = (uint)desc.ForceTarget,
+                ForceMode = (uint)desc.ForceMode,
+                DistanceScale = desc.DistanceScale,
+                LinearDamping = desc.LinearDamping,
+                AngularDamping = desc.AngularDamping,
+                Density = desc.Density,
+                SurfaceLevel = desc.SurfaceLevel,
+                FlowAngle = desc.FlowAngle,
+                FlowMagnitude = desc.FlowMagnitude,
+            };
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
         internal struct Joint2D
         {
             public uint Kind;
@@ -615,6 +686,24 @@ namespace Fomoxa.Networking.Rapier
 
         [DllImport(Library)]
         internal static extern uint fr2_joint_create(IntPtr world, uint body1, uint body2, in Joint2D joint);
+
+        [DllImport(Library)]
+        internal static extern uint fr2_effector_add(IntPtr world, uint body, uint[] colliders, uint count, in Effector2D effector);
+
+        [DllImport(Library)]
+        internal static extern uint fr2_effector_add_static(IntPtr world, uint group, uint[] colliders, uint count, in Effector2D effector);
+
+        [DllImport(Library)]
+        [return: MarshalAs(UnmanagedType.U1)]
+        internal static extern bool fr2_effector_remove(IntPtr world, uint effector);
+
+        [DllImport(Library)]
+        [return: MarshalAs(UnmanagedType.U1)]
+        internal static extern bool fr2_effector_contains(IntPtr world, uint effector);
+
+        [DllImport(Library)]
+        [return: MarshalAs(UnmanagedType.U1)]
+        internal static extern bool fr2_effector_set(IntPtr world, uint effector, in Effector2D recipe);
 
         [DllImport(Library)]
         [return: MarshalAs(UnmanagedType.U1)]

@@ -262,6 +262,150 @@ namespace Fomoxa.Networking.Rapier.Tests
         }
 
         [Test]
+        public void TheEffectorsOfASceneFileActOnItsGeometryAndOnTheBodiesOfItsSceneObjects()
+        {
+            SceneFile flatland = Flatland(ArenaSceneId);
+            SceneFileCollider2D wind = SceneFileGeometry.ToFile(new ColliderDesc2D(BodyShape2D.Box(new Vector2(1.5f, 1.5f)), new Vector2(-6f, 3f), 0f, ColliderMaterial.Default, 0, true));
+            wind.Effector = 1;
+            flatland.Colliders2D.Add(wind);
+            flatland.Effectors2D.Add(new SceneFileEffector2D { Kind = (byte)EffectorKind2D.Area, ForceMagnitude = 10f, GlobalAngle = true, OriginX = -6f, OriginY = 3f });
+            flatland.Effectors2D.Add(new SceneFileEffector2D { Kind = (byte)EffectorKind2D.Surface, Speed = 2f, ForceScale = 0.5f, Friction = true });
+            var floating = new BodyMotion2D(BodyLocks2D.None, 0f, 0f, 0f);
+            flatland.Objects.Add(new SceneFileObject
+            {
+                SceneObjectId = 31,
+                Fingerprint = 0xC1,
+                Pose = new SceneFilePose { PositionX = -6f, PositionY = 3f, RotationW = 1f, ScaleX = 1f, ScaleY = 1f, ScaleZ = 1f },
+                Body2D = SceneFileGeometry.ToFile(new BodyDesc2D(BodyKind.Dynamic, new[] { new ColliderDesc2D(BodyShape2D.Circle(0.5f), Vector2.Zero, 0f, ColliderMaterial.Default, 0, false) }, new Vector2(-6f, 3f), 0f, 1f, floating)),
+            });
+            SceneFileBody2D belt = SceneFileGeometry.ToFile(new BodyDesc2D(BodyKind.Kinematic, BodyShape2D.Box(new Vector2(3f, 0.25f)), Vector2.Zero, 0f, 0f));
+            belt.Colliders[0].Effector = 2;
+            var conveyor = new SceneFileObject
+            {
+                SceneObjectId = 32,
+                Fingerprint = 0xC2,
+                Pose = new SceneFilePose { PositionX = 5f, PositionY = 4f, RotationW = 1f, ScaleX = 1f, ScaleY = 1f, ScaleZ = 1f },
+                Body2D = SceneFileGeometry.ToFile(new BodyDesc2D(BodyKind.Kinematic, BodyShape2D.Box(new Vector2(0.25f, 0.25f)), new Vector2(5f, 4f), 0f, 0f)),
+            };
+            conveyor.ChildBodies2D.Add(new SceneFileChildBody2D { PositionY = -3f, Body = belt });
+            flatland.Objects.Add(conveyor);
+            flatland.Objects.Add(new SceneFileObject
+            {
+                SceneObjectId = 33,
+                Fingerprint = 0xC3,
+                Pose = new SceneFilePose { PositionX = 5f, PositionY = 1.75f, RotationW = 1f, ScaleX = 1f, ScaleY = 1f, ScaleZ = 1f },
+                Body2D = SceneFileGeometry.ToFile(new BodyDesc2D(BodyKind.Dynamic, BodyShape2D.Box(new Vector2(0.5f, 0.5f)), new Vector2(5f, 1.75f), 0f, 1f)),
+            });
+            var files = new SceneFiles();
+            files.Add(flatland);
+            var logged = new List<Exception>();
+            var log = new NetworkLog(logged.Add, message => { });
+            var settings = new NetworkSettings { PhysicsBackend = PhysicsBackend.Rapier };
+            TimeSpan now = TimeSpan.Zero;
+            using (var physics = new RapierScenes())
+            {
+                NetworkRuntime server = StandaloneRuntime.Create(TestObjects.Registry(), settings, new LoopbackFactory(), new StandalonePrefabs(), new StandaloneBehaviours(), files, () => now, log, physics);
+                server.ServerManager.StartConnection(7777);
+                server.ServerManager.Scenes.LoadGlobal(new[] { ArenaSceneId });
+                for (int frame = 0; frame < 60; frame++)
+                {
+                    now += TimeSpan.FromSeconds(Tick);
+                    server.BeginFrame(now, Tick);
+                    server.EndFrame();
+                }
+
+                var objects = new Dictionary<ulong, StandaloneEntity>();
+                foreach (INetworkEntity entity in server.ServerManager.Spawned.Values)
+                {
+                    objects.Add(entity.SceneObjectId, (StandaloneEntity)entity);
+                }
+
+                Assert.IsEmpty(logged);
+                Assert.Greater(objects[31].Position.X, -4f);
+                Assert.AreEqual(3f, objects[31].Position.Y, 1e-3f);
+                Assert.Greater(objects[33].Position.X, 5.5f);
+                Assert.AreEqual(1.75f, objects[33].Position.Y, 0.05f);
+            }
+        }
+
+        [Test]
+        public void AnEntityAddsEffectorsToItsOwnBodiesAndTheyLeaveWithThem()
+        {
+            using (var scenes = new RapierScenes())
+            {
+                StandaloneEntity entity = Entity();
+                StandaloneEntity other = Entity();
+                var zone = new ColliderDesc2D(BodyShape2D.Box(new Vector2(3f, 3f)), Vector2.Zero, 0f, ColliderMaterial.Default, 0, true);
+                PhysicsBody2D pad = scenes.AddBody2D(entity, ArenaSceneId, new BodyDesc2D(BodyKind.Kinematic, new[] { zone }, Vector2.Zero, 0f, 0f));
+                PhysicsBody2D ball = scenes.AddBody2D(other, ArenaSceneId, new BodyDesc2D(BodyKind.Dynamic, BodyShape2D.Circle(0.25f), Vector2.Zero, 0f, 1f));
+                EffectorDesc2D push = EffectorDesc2D.Area(0f, true, 10f, EffectorSelection.Rigidbody, 0f, 0f);
+
+                EffectorHandle effector = scenes.AddEffector(entity, pad, new[] { 0 }, push);
+                Run(scenes, 30);
+
+                Assert.IsTrue(scenes.WorldOf2D(ArenaSceneId).Contains(effector));
+                Assert.Greater(ball.Position.X, 0.5f);
+                Assert.Throws<ArgumentException>(() => scenes.AddEffector(entity, ball, new[] { 0 }, push));
+                Assert.Throws<ArgumentException>(() => scenes.AddEffector(entity, default, new[] { 0 }, push));
+
+                scenes.RemoveBodies(entity);
+
+                Assert.IsFalse(scenes.WorldOf2D(ArenaSceneId).Contains(effector));
+            }
+        }
+
+        [Test]
+        public void StaticGroupsAndUnownedBodiesOfTheScenesCarryEffectorsThatLeaveWithThem()
+        {
+            using (var scenes = new RapierScenes())
+            {
+                scenes.LoadScene(Flatland(ArenaSceneId));
+                var zone = new ColliderDesc2D(BodyShape2D.Box(new Vector2(2f, 2f)), new Vector2(-6f, 3f), 0f, ColliderMaterial.Default, 0, true);
+                StaticGroup wind = scenes.AddStatic2D(ArenaSceneId, new[] { zone });
+                EffectorHandle gust = scenes.AddEffector(wind, new[] { 0 }, EffectorDesc2D.Area(0f, true, 10f, EffectorSelection.Rigidbody, 0f, 0f));
+                PhysicsBody2D belt = scenes.AddBody2D(ArenaSceneId, new BodyDesc2D(BodyKind.Kinematic, BodyShape2D.Box(new Vector2(3f, 0.25f)), new Vector2(5f, 1f), 0f, 0f));
+                EffectorHandle carry = scenes.AddEffector(belt, new[] { 0 }, EffectorDesc2D.Surface(2f, 0.5f, false, true, true));
+                var floating = new BodyMotion2D(BodyLocks2D.None, 0f, 0f, 0f);
+                PhysicsBody2D kite = scenes.AddBody2D(ArenaSceneId, new BodyDesc2D(BodyKind.Dynamic, new[] { new ColliderDesc2D(BodyShape2D.Circle(0.25f), Vector2.Zero, 0f, ColliderMaterial.Default, 0, false) }, new Vector2(-6f, 3f), 0f, 1f, floating));
+                PhysicsBody2D crate = scenes.AddBody2D(ArenaSceneId, new BodyDesc2D(BodyKind.Dynamic, BodyShape2D.Box(new Vector2(0.5f, 0.5f)), new Vector2(5f, 1.75f), 0f, 1f));
+                PhysicsBody2D owned = scenes.AddBody2D(Entity(), ArenaSceneId, new BodyDesc2D(BodyKind.Kinematic, BodyShape2D.Box(Vector2.One), new Vector2(0f, 8f), 0f, 0f));
+                StaticGroup solid = scenes.AddStatic(LobbySceneId, new[] { new ColliderDesc(BodyShape.Box(Vector3.One), Vector3.Zero, Quaternion.Identity, ColliderMaterial.Default, 0, false) });
+                RapierWorld2D world = scenes.WorldOf2D(ArenaSceneId);
+
+                Run(scenes, 60);
+
+                Assert.Greater(kite.Position.X, -5f);
+                Assert.Greater(crate.Position.X, 5.5f);
+                Assert.AreEqual(1.75f, crate.Position.Y, 0.05f);
+                Assert.Throws<ArgumentException>(() => scenes.AddEffector(owned, new[] { 0 }, EffectorDesc2D.Surface(1f, 0.1f, false, true, true)));
+                Assert.Throws<ArgumentException>(() => scenes.AddEffector(solid, new[] { 0 }, EffectorDesc2D.Surface(1f, 0.1f, false, true, true)));
+
+                scenes.RemoveStatic(wind);
+                scenes.RemoveBody2D(belt);
+
+                Assert.IsFalse(world.Contains(gust));
+                Assert.IsFalse(world.Contains(carry));
+            }
+        }
+
+        [Test]
+        public void AnEffectorTheSceneFileDoesNotHaveAsksForANewExport()
+        {
+            using (var scenes = new RapierScenes())
+            {
+                SceneFile missing = Flatland(LobbySceneId);
+                missing.Colliders2D[0].Effector = 1;
+                SceneFile unknown = Flatland(LobbySceneId);
+                unknown.Colliders2D[0].Effector = 1;
+                unknown.Effectors2D.Add(new SceneFileEffector2D { Kind = 9 });
+
+                StringAssert.Contains("export the scene again", Assert.Throws<InvalidDataException>(() => scenes.LoadScene(missing)).Message);
+                StringAssert.Contains("export the scene again", Assert.Throws<InvalidDataException>(() => scenes.LoadScene(unknown)).Message);
+                CollectionAssert.IsEmpty(scenes.SceneIds2D);
+            }
+        }
+
+        [Test]
         public void AConsoleServerSimulatesTheSceneAndItsClientFollowsWithAProxy()
         {
             var files = new SceneFiles();
