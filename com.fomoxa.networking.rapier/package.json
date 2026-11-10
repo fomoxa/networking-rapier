@@ -1,6 +1,6 @@
 {
   "name": "com.fomoxa.networking.rapier",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "displayName": "Fomoxa Networking Rapier",
   "description": "Rapier physics backend for com.fomoxa.networking: deterministic 3D and 2D worlds shared by Unity clients and console servers.",
   "unity": "6000.5",

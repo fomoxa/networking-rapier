@@ -1,29 +1,31 @@
 # Fomoxa Networking Rapier
 
-`com.fomoxa.networking.rapier` is a physics backend for [`com.fomoxa.networking`](https://github.com/fomoxa/com.fomoxa.networking) built on [Rapier](https://rapier.rs). Network objects are simulated in Rapier worlds instead of Unity's PhysX. Given the same inputs, a Unity client and a server that runs without Unity compute the same physics state, on Windows or Linux.
+`com.fomoxa.networking.rapier` is a physics backend for [`com.fomoxa.networking`](https://github.com/fomoxa/com.fomoxa.networking) built on [Rapier](https://rapier.rs). Network objects are simulated in Rapier worlds instead of Unity's PhysX and Box2D. Given the same inputs, a Unity client and a server that runs without Unity compute the same physics state.
 
 | | |
 |---|---|
-| Version | 0.1.1 |
-| Requires | `com.fomoxa.networking` 0.2.0 |
+| Version | 0.2.0 |
+| Requires | `com.fomoxa.networking` 0.3.0 |
 | Unity | 6000.5 or later |
-| Platforms | Windows x64, Linux x64 with glibc 2.34 or newer (Editor, players, console servers) |
+| Platforms | Windows x64 and arm64, Linux x64 and arm64 with glibc 2.34 or newer, macOS, Android `arm64-v8a` and `armeabi-v7a`, iOS, Web |
 | Rapier | `rapier3d` and `rapier2d` 0.36.0 with `enhanced-determinism` |
 | License | Apache-2.0 (Rapier and the other linked crates: see `Third Party Notices.md`) |
 
+The documentation is in [fomoxa/unity-docs](https://github.com/fomoxa/unity-docs/blob/main/rapier/overview.md).
+
 ## Why Rapier
 
-The Rigidbody backend of `com.fomoxa.networking` drives Unity's PhysX. PhysX cannot restore its contact state, so a replayed tick only approximates the original one, and a server without Unity cannot run PhysX at all.
+The Rigidbody backend of `com.fomoxa.networking` drives Unity's PhysX and Box2D. They cannot restore their contact state, so a replayed tick only approximates the original one, and a server without Unity cannot run them at all.
 
-This package keeps one Rapier world per network scene and per dimension. A snapshot holds the whole world, contacts included, so a replay after `Load` reproduces the original ticks bit for bit. Rapier is pinned to one version and built with `enhanced-determinism`, and the same steps give the same state on Windows and Linux, under Mono and under .NET. A console server and a Unity client build their worlds from the same scene file and the same body descriptions, so both run one simulation.
+This package keeps one Rapier world per network scene and per dimension. A snapshot holds the whole world, contacts and joints included, so a replay after `Load` reproduces the original ticks bit for bit. Rapier is pinned to one version and built with `enhanced-determinism`, and the same steps give the same state on every checked platform, under Mono, IL2CPP and .NET. A console server and a Unity client build their worlds from the same scene file and the same body descriptions, so both run one simulation.
 
 ## Installation
 
 Add both packages from git in Window > Package Manager > + > Install package from git URL:
 
 ```
-https://github.com/fomoxa/com.fomoxa.networking.git
-https://github.com/fomoxa/networking-rapier.git?path=com.fomoxa.networking.rapier
+https://github.com/fomoxa/com.fomoxa.networking.git#0.3.0
+https://github.com/fomoxa/networking-rapier.git?path=com.fomoxa.networking.rapier#0.2.0
 ```
 
 A Unity package cannot declare a dependency on a git package, so `com.fomoxa.networking` is not listed in this package's dependencies. The package checks the Core version when it creates its worlds and throws if the project has a different one.
@@ -34,7 +36,7 @@ A Unity package cannot declare a dependency on a git package, so `com.fomoxa.net
 2. Do the same for the server and every client. A connection needs the same physics backend on both sides; a client whose backend differs from the server's is stopped with `StopReason.PhysicsBackendMismatch`.
 3. Export the network scene files. The Fomoxa Editor step writes them when you save a network scene, and on Tools > Fomoxa > Export Network Scene Files. Rapier reads the static geometry of a scene from its file, so a scene without a file has no static colliders in Rapier and logs a warning.
 
-`NetworkObject.Body` and `NetworkObject.Body2D` then return bodies in the Rapier world of the object's scene, built from the object's colliders and its `Rigidbody` or `Rigidbody2D`. After every tick Rapier writes each body's pose back to the object's `Transform`. The `Rigidbody` is switched to kinematic, so PhysX only does local cosmetic work.
+`NetworkObject.Body` and `NetworkObject.Body2D` then return bodies in the Rapier world of the object's scene, built from the object's colliders and its `Rigidbody` or `Rigidbody2D`. `NetworkObject.Bodies` and `Bodies2D` also list the bodies on child GameObjects, and the joint components between them become Rapier joints. A `Rigidbody2D` with Simulated turned off when the object is bound is not a body. After every tick Rapier writes each body's pose back to the `Transform` of its GameObject. The `Rigidbody` is switched to kinematic, so PhysX only does local cosmetic work.
 
 Supported colliders:
 
@@ -46,9 +48,19 @@ Supported colliders:
 
 Meshes used by a body that is created at runtime must have Read/Write enabled. Friction, bounciness and their combine modes come from the physics material. Layers and the layer collision matrix of the project apply as in Unity. Trigger colliders become Rapier sensors.
 
+The Rapier worlds also support:
+
+| Feature | Documentation |
+|---|---|
+| Rays, shape casts, overlaps and contact points | [Physics queries](https://github.com/fomoxa/unity-docs/blob/main/physics/queries.md) |
+| Forces, torques and continuous collision | [PhysicsBody](https://github.com/fomoxa/unity-docs/blob/main/physics/physics-body.md) |
+| Unity's joint components, and joints created from code | [Joints](https://github.com/fomoxa/unity-docs/blob/main/rapier/joints.md) |
+| `MoveCharacter`, a character controller for kinematic bodies | [Character controller](https://github.com/fomoxa/unity-docs/blob/main/rapier/character-controller.md) |
+| `PlatformEffector2D`, `SurfaceEffector2D`, `AreaEffector2D`, `BuoyancyEffector2D`, `PointEffector2D` | [Effectors](https://github.com/fomoxa/unity-docs/blob/main/rapier/effectors.md) |
+
 ## Contact events
 
-`NetworkTrigger`, `NetworkCollision`, `NetworkTrigger2D` and `NetworkCollision2D` keep their API. `RapierPhysics` takes over these components on the objects it simulates and on the static objects of the scenes it loads, and they then report the contact and intersection pairs of the Rapier world instead of PhysX callbacks. Rollback restores the pairs together with the bodies.
+`NetworkTrigger`, `NetworkCollision`, `NetworkTrigger2D` and `NetworkCollision2D` keep their API. `RapierPhysics` takes over these components on the objects it simulates, on the static objects of the scenes it loads and on the GameObjects passed to `AddStatic(GameObject)` or `AddStatic2D(GameObject)`, and they then report the contact and intersection pairs of the Rapier world instead of Unity's callbacks. `GetContactPoints` returns the points of those pairs, in 3D as well as in 2D. Rollback restores the pairs together with the bodies.
 
 Differences from the Rigidbody backend:
 
@@ -61,12 +73,15 @@ Differences from the Rigidbody backend:
 The assembly `Fomoxa.Networking.Rapier` does not reference `UnityEngine`. A console server compiles it together with the Core and the console backend of `com.fomoxa.networking`, copies the native library next to its executable, and passes a `RapierScenes` to `StandaloneRuntime.Create`:
 
 ```csharp
-var settings = new NetworkSettings { PhysicsBackend = PhysicsBackend.Rapier };
 var physics = new RapierScenes(new Vector3(0f, -9.81f, 0f));
-NetworkRuntime server = StandaloneRuntime.Create(registry, settings, new UdpTransportFactory(), prefabs, behaviours, new SceneFileDirectory("Scenes"), clock, log, physics);
+var settings = new NetworkSettings { PhysicsBackend = PhysicsBackend.Rapier };
+NetworkRuntime runtime = StandaloneRuntime.Create(
+    registry, settings, new UdpTransportFactory(), prefabs, behaviours,
+    new SceneFileDirectory(scenesFolder), () => clock.Elapsed, NetworkLog.Console,
+    physics, new[] { FomoxaScenes.GameId });
 ```
 
-The console backend loads each scene file into its own Rapier world and creates the bodies of entities from `StandaloneEntity.TryGetBody` and `TryGetBody2D`.
+The console backend loads each scene file into its own Rapier worlds and creates the bodies of entities from `StandaloneEntity.TryGetBody`, `TryGetBody2D`, `GetChildBodies` and `GetChildBodies2D`. The bodies of scene objects, child bodies included, come from the scene file.
 
 ## Keeping the simulation deterministic
 
@@ -78,7 +93,8 @@ Rapier gives the same result for the same world and the same operations. Game co
 
 ## Limitations
 
-- Windows x64 and Linux x64 only. macOS, Android, iOS and WebGL clients cannot use this backend yet.
-- IL2CPP players have not been checked for determinism against Mono and .NET.
-- Joints, effectors (`PlatformEffector2D` and the others), continuous collision settings and contact points are not supported.
-- One body per network object.
+- `CharacterController`, `WheelCollider`, `ConfigurableJoint`, `WheelJoint2D`, `RelativeJoint2D`, `TargetJoint2D` and `FrictionJoint2D` are not supported, and 3D has no effectors because Unity has no 3D effector components.
+- Joints do not break.
+- Android x86-64 has no library.
+- The Web library does not work with Enable C/C++ Native Multithreading.
+- Players on Linux, macOS and iOS have not been run with the hash check that the Windows, Web and Android players pass.

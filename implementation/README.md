@@ -1,8 +1,8 @@
-# Rapier backend implementation (8b)
+# Rapier backend implementation
 
-This folder holds the implementation notes of the 8b sub-steps done in the `networking-rapier` repository. The design is in the `unity` repository, in `design/principles.md` P27 (section "Server console và 8b", console server and 8b) and `design/open-questions.md` Q163 to Q166. The plan and the contract of each sub-step are in the 8b section of `implementation/08-prediction-physics.md` in the `unity` repository.
+This folder holds the implementation notes of the steps done in the `networking-rapier` repository. The design is in the `unity` repository, in `design/principles.md` P27 and `design/open-questions.md`. The plan and the contract of each step are in `implementation/` of the `unity` repository: the 8b section of `08-prediction-physics.md` for steps 08.13 to 08.17, and the step files of stages 11 and 12, which hold the full listings for this repository.
 
-The order of authority is the same as in the `unity` repository: `design/` of the `unity` repository, then the 8b plan in its `implementation/`, then the files in this folder, then the code.
+The order of authority is the same as in the `unity` repository: `design/` of the `unity` repository, then its `implementation/`, then the files in this folder, then the code.
 
 ## Status
 
@@ -21,9 +21,16 @@ The order of authority is the same as in the `unity` repository: `design/` of th
 | 12.1 | Libraries for every platform, built in CI, golden hashes | [`12-1-native-platforms.md`](12-1-native-platforms.md) | ✅ |
 | 12.2 | Golden hashes inside Unity players | [`12-2-player-check.md`](12-2-player-check.md) | ✅ |
 | 12.3 | Query filter, shape casts, shape overlaps, query pipeline | [`12-3-queries.md`](12-3-queries.md) | ✅ |
-| — | CI | — | not yet: how CI gets the Core is not decided |
+| 12.4 | Torques, forces at a point, continuous collision | [`12-4-forces.md`](12-4-forces.md) | ✅ |
+| 12.5 | Contact points | [`12-5-contacts.md`](12-5-contacts.md) | ✅ |
+| 12.6 | Several bodies per object | [`12-6-bodies.md`](12-6-bodies.md) | ✅ |
+| 12.7 | Joints | [`12-7-joints.md`](12-7-joints.md) | ✅ |
+| 12.8 | Character controller | [`12-8-character.md`](12-8-character.md) | ✅ |
+| 12.9 | Effectors | [`12-9-effectors.md`](12-9-effectors.md) | ✅ |
+| 12.10 | `Rigidbody2D` components that are not simulated | [`12-10-simulated-bodies.md`](12-10-simulated-bodies.md) | ✅ |
+| 12.10 | Release 0.2.0 with `com.fomoxa.networking` 0.3.0 | [`12-10-release.md`](12-10-release.md) | ✅ |
 
-The part shared by every backend (the public physics interface, `NetworkPhysics`, body colliders, the collider converter, scene files, console backend physics, the contact source plug-in point) is done in the `unity` repository, in steps 08.8 to 08.12 and the `Fomoxa.Unity` part of 08.15.
+The part shared by every backend (the public physics interface, `NetworkPhysics`, body colliders, the collider converter, scene files, console backend physics, the contact source plug-in point) is done in the `unity` repository, in steps 08.8 to 08.12, the `Fomoxa.Unity` part of 08.15 and the Core parts of steps 11.10, 12.3 to 12.6, 12.9 and 12.10.
 
 ## Layout
 
@@ -32,29 +39,25 @@ native/fomoxa-rapier/            FFI crate (rapier3d, rapier2d =0.36.0, enhanced
 com.fomoxa.networking.rapier/    Unity package
   Runtime/Rapier/                assembly Fomoxa.Networking.Rapier, no UnityEngine reference
   Runtime/Unity/                 assembly Fomoxa.Unity.Rapier
-  Runtime/Plugins/               prebuilt native libraries (Linux x64, Windows x64)
+  Runtime/Plugins/               native libraries of every platform, from the native-libraries workflow
   Tests/Unity/                   Unity tests; TwoSided/ is the two-sided check
 tests/                           dotnet tests of the tier 1 part
 test-project/                    Unity project that runs the package tests
 checks/two-sided/                console server of the two-sided check
+checks/player/                   Unity project that runs the golden hashes inside players
+bench/                           ragdoll benchmark
 Tools/                           library builds, Unity tests on Windows, two-sided check, third-party notices
 implementation/                  this folder
 ```
 
 ## Core
 
-The dotnet tests, the Unity project and the two-sided server take the Core from `../unity/com.fomoxa.networking`, that is, the `unity` repository cloned next to this one. How CI gets the Core is not decided; the options are a copy with a `SOURCE` file, a submodule pinned to a commit, or a tag. The 8b plan in the `unity` repository records a pinned submodule, and P12 records that CI takes the Core at a pinned tag. Once one is chosen, the paths `../../unity` and `../../../unity` in `tests/*.csproj`, `checks/two-sided/*.csproj`, `test-project/Packages/manifest.json` and `Tools/*.sh` change accordingly.
+The dotnet tests, the Unity project and the two-sided server take the Core from `../unity/com.fomoxa.networking`, that is, the `unity` repository cloned next to this one. CI takes the public `fomoxa/com.fomoxa.networking` at the commit in `CORE_COMMIT` of `.github/workflows/ci.yml`, and a step that needs a newer Core moves that commit after the Core has been pushed.
 
 ## Commands
 
-| Task | Command |
-|---|---|
-| Build the Linux and Windows libraries | `Tools/build-rapier.sh linux`, `Tools/build-rapier.sh windows`, `Tools/build-rapier.sh all` |
-| dotnet tests (Linux) | `dotnet test tests/Fomoxa.Networking.Rapier.Tests.csproj` |
-| Unity EditMode tests (Windows, from WSL) | `Tools/unity-windows-check.sh` |
-| Two-sided check | `Tools/two-sided-check.sh linux`, `Tools/two-sided-check.sh windows` |
-| Third-party notices | `python3 Tools/third-party-notices.py` |
+The commands are listed in the [repository README](../README.md#commands).
 
 Under WSL, `dotnet` needs `LANG=C.UTF-8 LC_ALL=C.UTF-8 DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1`. The Windows build uses the Windows `cargo.exe`. The dotnet tests on Windows run with `dotnet.exe`, with `TargetFramework` changed to `net9.0` in the copied project, because the machine only has SDK 9.
 
-The native libraries are built by hand and committed, following the fomoxac rule; there is no CI that builds or releases them (Q163 (2) C). After changing the crate, rebuild both platforms, then run the tests on both platforms and the two-sided check. If the dependency tree changed, run `Tools/third-party-notices.py` again.
+The workflow `native-libraries` builds the native libraries, and they are committed with `native/fomoxa-rapier/built-from.txt`. The repository README, section Native libraries, describes the steps after a change to the crate. If the dependency tree changed, run `Tools/third-party-notices.py` again.
