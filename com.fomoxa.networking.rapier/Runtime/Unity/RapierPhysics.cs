@@ -537,11 +537,15 @@ namespace Fomoxa.Unity.Rapier
                     }
                 }
 
-                AddPart2D(networkObject, found, sceneId, root);
+                if (!root.TryGetComponent(out Rigidbody2D root2D) || root2D.simulated)
+                {
+                    AddPart2D(networkObject, found, sceneId, root);
+                }
+
                 networkObject.GetComponentsInChildren(true, treeBodies2D);
                 foreach (Rigidbody2D rigidbody in treeBodies2D)
                 {
-                    if (rigidbody.gameObject != root && ActiveInTree(rigidbody.transform, root.transform))
+                    if (rigidbody.gameObject != root && rigidbody.simulated && ActiveInTree(rigidbody.transform, root.transform))
                     {
                         AddPart2D(networkObject, found, sceneId, rigidbody.gameObject);
                     }

@@ -427,6 +427,42 @@ namespace Fomoxa.Unity.Rapier.Tests
         }
 
         [Test]
+        public void Rigidbody2DsThatAreNotSimulatedAtSpawnAreNotBodiesAndTheirJointsAreNotBuilt()
+        {
+            NetworkObject runnerPrefab = Prefab("Runner2D", RagdollPrefabId, runner =>
+            {
+                runner.AddComponent<CircleCollider2D>().radius = 0.5f;
+                runner.AddComponent<Rigidbody2D>();
+                Rigidbody2D body = Bone2D(runner.transform, "Body", new Vector2(0f, 0.5f));
+                Rigidbody2D arm = Bone2D(runner.transform, "Arm", new Vector2(0.5f, 0.5f));
+                arm.gameObject.AddComponent<HingeJoint2D>().connectedBody = body;
+            });
+            NetworkObject ghostPrefab = Prefab("Ghost2D", ChainPrefabId, ghost =>
+            {
+                ghost.AddComponent<CircleCollider2D>().radius = 0.5f;
+                ghost.AddComponent<Rigidbody2D>().simulated = false;
+            });
+            NetworkObject groundPrefab = Prefab("Ground2D", GroundPrefabId, ground => ground.AddComponent<BoxCollider2D>().size = new Vector2(20f, 1f));
+            NetworkManager server = Manager(runnerPrefab, ghostPrefab, groundPrefab);
+            server.ServerManager.StartConnection(1);
+            Spawn(server, groundPrefab, new Vector3(0f, -0.5f, 0f));
+            NetworkObject runner = Spawn(server, runnerPrefab, new Vector3(0f, 3f, 0f));
+            NetworkObject ghost = Spawn(server, ghostPrefab, new Vector3(4f, 3f, 0f));
+            Transform arm = runner.transform.Find("Arm");
+
+            RunFrames(180);
+
+            Assert.AreEqual(1, runner.Bodies2D.Count);
+            Assert.AreEqual(runner.Body2D.Handle, runner.Bodies2D[0].Handle);
+            Assert.AreEqual(0.5f, runner.transform.position.y, 0.05f);
+            Assert.AreEqual(new Vector3(0.5f, 0.5f, 0f), arm.localPosition);
+            Assert.AreEqual(0, ghost.Bodies2D.Count);
+            Assert.IsFalse(ghost.Body2D.IsValid);
+            Assert.AreEqual(3f, ghost.transform.position.y, 1e-5f);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
         public void AClientKeepsTheObjectsItDoesNotPredictAsKinematicProxies()
         {
             NetworkObject ballPrefab = Prefab("Ball", BallPrefabId, ball => { ball.AddComponent<SphereCollider>().radius = 0.5f; ball.AddComponent<Rigidbody>(); });
@@ -886,6 +922,17 @@ namespace Fomoxa.Unity.Rapier.Tests
             limb.AddComponent<SphereCollider>().radius = 0.25f;
             limb.AddComponent<Rigidbody>();
             return limb;
+        }
+
+        private static Rigidbody2D Bone2D(Transform parent, string name, Vector2 localPosition)
+        {
+            var bone = new GameObject(name);
+            bone.transform.SetParent(parent, false);
+            bone.transform.localPosition = localPosition;
+            bone.AddComponent<CircleCollider2D>().radius = 0.25f;
+            var rigidbody = bone.AddComponent<Rigidbody2D>();
+            rigidbody.simulated = false;
+            return rigidbody;
         }
 
         private static bool ReadEveryTick(NetworkObject networkObject) =>
