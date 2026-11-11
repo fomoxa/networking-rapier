@@ -4,8 +4,8 @@
 
 | | |
 |---|---|
-| Version | 0.2.3 |
-| Requires | `com.fomoxa.networking` 0.3.3 |
+| Version | 0.2.4 |
+| Requires | `com.fomoxa.networking` 0.3.4 |
 | Unity | 6000.5 or later |
 | Platforms | Windows x64 and arm64, Linux x64 and arm64 with glibc 2.34 or newer, macOS, Android `arm64-v8a` and `armeabi-v7a`, iOS, Web |
 | Rapier | `rapier3d` and `rapier2d` 0.36.0 with `enhanced-determinism` |
@@ -24,8 +24,8 @@ This package keeps one Rapier world per network scene and per dimension. A snaps
 Add both packages from git in Window > Package Manager > + > Install package from git URL:
 
 ```
-https://github.com/fomoxa/com.fomoxa.networking.git#0.3.3
-https://github.com/fomoxa/networking-rapier.git?path=com.fomoxa.networking.rapier#0.2.3
+https://github.com/fomoxa/com.fomoxa.networking.git#0.3.4
+https://github.com/fomoxa/networking-rapier.git?path=com.fomoxa.networking.rapier#0.2.4
 ```
 
 A Unity package cannot declare a dependency on a git package, so `com.fomoxa.networking` is not listed in this package's dependencies. The package checks the Core version when it creates its worlds and throws if the project has a different one.

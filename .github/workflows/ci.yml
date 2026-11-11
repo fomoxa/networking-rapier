@@ -6,7 +6,7 @@ on:
 
 env:
   CORE_REPOSITORY: fomoxa/com.fomoxa.networking
-  CORE_COMMIT: 2049134f25fc95775fdee11d5e0929f12f7c3667
+  CORE_COMMIT: 6c307840f16140cf5353d9233b58ab70bb75f1c5
 
 jobs:
   test:
