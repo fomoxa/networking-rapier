@@ -30,6 +30,7 @@ The order of authority is the same as in the `unity` repository: `design/` of th
 | 12.10 | `Rigidbody2D` components that are not simulated | [`12-10-simulated-bodies.md`](12-10-simulated-bodies.md) | ✅ |
 | 12.10 | Release 0.2.0 with `com.fomoxa.networking` 0.3.0 | [`12-10-release.md`](12-10-release.md) | ✅ |
 | 12.11 | Release 0.2.1 with `com.fomoxa.networking` 0.3.1 | [`12-11-release.md`](12-11-release.md), [`12-13-release.md`](12-13-release.md) | ✅ |
+| 12.15 | Release 0.2.3 with `com.fomoxa.networking` 0.3.3 | [`12-15-release.md`](12-15-release.md) | ✅ |
 
 The part shared by every backend (the public physics interface, `NetworkPhysics`, body colliders, the collider converter, scene files, console backend physics, the contact source plug-in point) is done in the `unity` repository, in steps 08.8 to 08.12, the `Fomoxa.Unity` part of 08.15 and the Core parts of steps 11.10, 12.3 to 12.6, 12.9 and 12.10.
 
