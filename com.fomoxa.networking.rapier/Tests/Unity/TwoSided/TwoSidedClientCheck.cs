@@ -169,7 +169,7 @@ namespace Fomoxa.Unity.Rapier.Tests
 
         public int Index { get; set; }
 
-        protected override void OnRegisterInput(NetworkInput input)
+        internal override void OnRegisterInput(NetworkInput input)
         {
             var motion = new TwoSidedMotion(() => NetworkObject.Body, Index, () => WorldHash(), Record);
             motion.Register(input);
