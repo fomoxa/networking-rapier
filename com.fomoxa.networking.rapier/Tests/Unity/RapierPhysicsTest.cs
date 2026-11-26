@@ -330,6 +330,73 @@ namespace Fomoxa.Unity.Rapier.Tests
         }
 
         [Test]
+        public void TheServerWritesAnOwnerPoseIntoTheRapierBodiesOfTheRootAndAChildAndHoldsThemKinematic()
+        {
+            NetworkObject ragdollPrefab = Prefab("Ragdoll", RagdollPrefabId, ragdoll =>
+            {
+                ragdoll.AddComponent<SphereCollider>().radius = 0.5f;
+                ragdoll.AddComponent<Rigidbody>();
+                LetTheOwnerDecide(ragdoll.AddComponent<NetworkTransform>());
+                LetTheOwnerDecide(Limb(ragdoll.transform, "Limb", new Vector3(1.5f, 0f, 0f)).AddComponent<NetworkTransform>());
+            });
+            NetworkManager server = Manager(ragdollPrefab);
+            NetworkManager client = Manager(ragdollPrefab);
+            ulong ownerId = 0;
+            server.ServerManager.OnRemoteConnectionState += args => ownerId = args.PeerId;
+            server.ServerManager.StartConnection(1);
+            client.ClientManager.StartConnection("unused.invalid", 1);
+            RunFrames(30);
+            NetworkObject ragdoll = UnityEngine.Object.Instantiate(ragdollPrefab, new Vector3(0f, 3f, 0f), Quaternion.identity);
+            created.Add(ragdoll.gameObject);
+            server.ServerManager.Spawn(ragdoll, ownerId);
+            RunFrames(10);
+            var onOwner = (NetworkObject)client.ClientManager.Spawned[ragdoll.ObjectId];
+            Transform limb = ragdoll.transform.Find("Limb");
+            onOwner.transform.position = new Vector3(5f, 3f, 0f);
+            onOwner.transform.Find("Limb").localPosition = new Vector3(1.5f, 1f, 0f);
+            RunFrames(30);
+
+            Assert.IsTrue(ragdoll.Body.IsKinematic);
+            Assert.IsTrue(ragdoll.Bodies[1].IsKinematic);
+            Assert.Less(Vector3.Distance(new Vector3(5f, 3f, 0f), ragdoll.transform.position), 1e-4f);
+            Assert.Less(Vector3.Distance(new Vector3(5f, 3f, 0f), ragdoll.Body.Position), 1e-4f);
+            Assert.Less(Vector3.Distance(new Vector3(6.5f, 4f, 0f), limb.position), 1e-4f);
+            Assert.Less(Vector3.Distance(new Vector3(6.5f, 4f, 0f), ragdoll.Bodies[1].Position), 1e-4f);
+
+            ragdoll.GetComponent<NetworkTransform>().OwnerAuthority = false;
+            limb.GetComponent<NetworkTransform>().OwnerAuthority = false;
+            RunFrames(2);
+
+            Assert.IsFalse(ragdoll.Body.IsKinematic);
+            Assert.IsFalse(ragdoll.Bodies[1].IsKinematic);
+        }
+
+        [Test]
+        public void BodyOfAPartIsTheRapierBodyOfThatGameObjectOnly()
+        {
+            NetworkObject ragdollPrefab = Prefab("Ragdoll", RagdollPrefabId, ragdoll =>
+            {
+                ragdoll.AddComponent<SphereCollider>().radius = 0.5f;
+                ragdoll.AddComponent<Rigidbody>();
+                Limb(ragdoll.transform, "Limb", new Vector3(1.5f, 0f, 0f));
+                new GameObject("Bare").transform.SetParent(ragdoll.transform, false);
+            });
+            NetworkManager server = Manager(ragdollPrefab);
+            server.ServerManager.StartConnection(1);
+            NetworkObject ragdoll = Spawn(server, ragdollPrefab, new Vector3(0f, 3f, 0f));
+            RunFrames(1);
+            var physics = server.GetComponent<RapierPhysics>();
+
+            PhysicsBody limb = physics.BodyOf(ragdoll.transform.Find("Limb"));
+
+            Assert.AreEqual(ragdoll.Body.Handle, physics.BodyOf(ragdoll.transform).Handle);
+            Assert.AreEqual(ragdoll.Bodies[1].Handle, limb.Handle);
+            Assert.IsFalse(physics.BodyOf(ragdoll.transform.Find("Bare")).IsValid);
+            Assert.IsFalse(physics.Body2DOf(ragdoll.transform).IsValid);
+            Assert.IsFalse(physics.BodyOf((Transform)null).IsValid);
+        }
+
+        [Test]
         public void AClientProxiesTheRootAndTheChildBodiesWithANetworkTransformOnly()
         {
             NetworkObject ragdollPrefab = Prefab("Ragdoll", RagdollPrefabId, ragdoll =>
@@ -972,6 +1039,13 @@ namespace Fomoxa.Unity.Rapier.Tests
             var physics = manager.GetComponent<RapierPhysics>();
             physics.SceneIdOf = scene => scene == active ? ArenaSceneId : 0;
             physics.SceneFileOf = sceneId => sceneId == ArenaSceneId ? bytes : null;
+        }
+
+        private static void LetTheOwnerDecide(NetworkTransform networkTransform)
+        {
+            var serialized = new SerializedObject(networkTransform);
+            serialized.FindProperty("ownerAuthority").boolValue = true;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
         }
 
         private static GameObject Limb(Transform parent, string name, Vector3 localPosition)

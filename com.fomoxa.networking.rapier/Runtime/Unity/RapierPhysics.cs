@@ -132,6 +132,10 @@ namespace Fomoxa.Unity.Rapier
 
         public override IReadOnlyList<PhysicsBody2D> Bodies2DOf(NetworkObject networkObject) => Bind(networkObject)?.Bodies2D ?? (IReadOnlyList<PhysicsBody2D>)Array.Empty<PhysicsBody2D>();
 
+        public override PhysicsBody BodyOf(Transform part) => PartOf(part)?.Body ?? default;
+
+        public override PhysicsBody2D Body2DOf(Transform part) => PartOf(part)?.Body2D ?? default;
+
         public override PhysicsHistory HistoryOf(IPhysicsSimulation world, int capacity) => scenes.HistoryOf(world, capacity);
 
         public bool ReportsMotion(INetworkEntity entity) => scenes != null && scenes.ReportsMotion(entity);
@@ -507,6 +511,30 @@ namespace Fomoxa.Unity.Rapier
                     spawned.Add(networkObject);
                 }
             }
+        }
+
+        private BoundPart PartOf(Transform part)
+        {
+            if (part == null)
+            {
+                return null;
+            }
+
+            Bound found = Bind(part.GetComponentInParent<NetworkObject>(true));
+            if (found == null)
+            {
+                return null;
+            }
+
+            foreach (BoundPart candidate in found.Parts)
+            {
+                if (candidate.Transform == part)
+                {
+                    return candidate;
+                }
+            }
+
+            return null;
         }
 
         private Bound Bind(NetworkObject networkObject)
