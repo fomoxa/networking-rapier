@@ -89,7 +89,7 @@ namespace Fomoxa.Unity.Rapier.Tests
             Assert.IsTrue(ball.GetComponent<Rigidbody>().isKinematic);
             Assert.IsTrue(ball.Body.IsValid);
             Assert.AreEqual(2f, ball.Body.Mass, 1e-4f);
-            Assert.AreEqual(ball.transform.position.y, ball.Body.Position.Y, 1e-5f);
+            Assert.AreEqual(ball.transform.position.y, ball.Body.Position.y, 1e-5f);
             Assert.IsTrue(ground.Body.IsValid);
 
             server.ReleasePhysicsSimulation();
@@ -131,8 +131,8 @@ namespace Fomoxa.Unity.Rapier.Tests
             uint lastTickAtRest = onClient.LastTick;
             RunFrames(30);
             uint lastTickStillAtRest = onClient.LastTick;
-            PhysicsBody body = ball.Body;
-            body.Velocity = new System.Numerics.Vector3(3f, 0f, 0f);
+            NetworkBody body = ball.Body;
+            body.Velocity = new Vector3(3f, 0f, 0f);
             RunFrames(5);
 
             Assert.IsFalse(fallingReadEveryTick);
@@ -325,7 +325,7 @@ namespace Fomoxa.Unity.Rapier.Tests
             Assert.IsTrue(limb.GetComponent<Rigidbody>().isKinematic);
             Assert.AreEqual(0.5f, ragdoll.transform.position.y, 0.05f);
             Assert.AreEqual(0.25f, limb.position.y, 0.05f);
-            Assert.AreEqual(limb.position.y, ragdoll.Bodies[1].Position.Y, 1e-5f);
+            Assert.AreEqual(limb.position.y, ragdoll.Bodies[1].Position.y, 1e-5f);
             Assert.Less(Vector3.Distance(limb.localPosition, onClient.transform.Find("Limb").localPosition), 1e-3f);
         }
 
@@ -348,7 +348,7 @@ namespace Fomoxa.Unity.Rapier.Tests
             RunFrames(30);
 
             var onClient = (NetworkObject)client.ClientManager.Spawned[ragdoll.ObjectId];
-            IReadOnlyList<PhysicsBody> bodies = onClient.Bodies;
+            IReadOnlyList<NetworkBody> bodies = onClient.Bodies;
             Assert.AreEqual(3, bodies.Count);
             Assert.IsTrue(bodies[0].IsKinematic);
             Assert.IsTrue(bodies[1].IsKinematic);
@@ -482,7 +482,7 @@ namespace Fomoxa.Unity.Rapier.Tests
             Assert.IsTrue(onClient.Body.IsValid);
             Assert.IsTrue(onClient.Body.IsKinematic);
             Assert.AreEqual(placed, onClient.transform.position);
-            Assert.AreEqual(onClient.transform.position.y, onClient.Body.Position.Y, 1e-5f);
+            Assert.AreEqual(onClient.transform.position.y, onClient.Body.Position.y, 1e-5f);
         }
 
         [Test]
@@ -706,10 +706,10 @@ namespace Fomoxa.Unity.Rapier.Tests
             RunFrames(2);
             RapierScenes scenes = server.GetComponent<RapierPhysics>().Scenes;
 
-            CharacterMove last = default;
+            NetworkCharacterMove last = default;
             for (int frame = 0; frame < 40; frame++)
             {
-                last = scenes.MoveCharacter(character, character.Body, new System.Numerics.Vector3(0.1f, -0.02f, 0f), (float)FrameSeconds, CharacterSettings.Default);
+                last = scenes.MoveCharacter(character, character.Body, new Vector3(0.1f, -0.02f, 0f), (float)FrameSeconds, CharacterSettings.Default);
                 RunFrames(1);
             }
 
@@ -717,8 +717,68 @@ namespace Fomoxa.Unity.Rapier.Tests
             Assert.AreEqual(0.81f, character.transform.position.y, 0.02f);
             Assert.AreEqual(Quaternion.identity, character.transform.rotation);
             Assert.IsTrue(last.Grounded);
-            Assert.AreEqual(0f, last.Moved.X, 1e-3f);
+            Assert.AreEqual(0f, last.Moved.x, 1e-3f);
             Assert.IsTrue(character.GetComponent<Rigidbody>().isKinematic);
+            CharacterMove core = scenes.MoveCharacter(character, character.Body.Core, new System.Numerics.Vector3(0.1f, -0.02f, 0f), (float)FrameSeconds, CharacterSettings.Default);
+            NetworkCharacterMove filtered = scenes.MoveCharacter(character, character.Body, new Vector3(0.1f, -0.02f, 0f), (float)FrameSeconds, CharacterSettings.Default, QueryFilter.All);
+            Assert.AreEqual(core.Moved.X, filtered.Moved.x, 1e-6f);
+            Assert.AreEqual(core.Grounded, filtered.Grounded);
+            Assert.AreEqual(core.Sliding, filtered.Sliding);
+        }
+
+        [Test]
+        public void AJointBetweenAnObjectAndTheWorldIsCreatedThroughTheScenesWithItsNetworkBody()
+        {
+            NetworkObject doorPrefab = Prefab("Door", BallPrefabId, door => { door.AddComponent<BoxCollider>().size = new Vector3(1f, 2f, 0.1f); door.AddComponent<Rigidbody>().useGravity = false; });
+            NetworkManager server = Manager(doorPrefab);
+            UseActiveScene(server);
+            server.ServerManager.StartConnection(1);
+            NetworkObject door = Spawn(server, doorPrefab, new Vector3(0f, 1f, 0f));
+            RunFrames(2);
+            RapierScenes scenes = server.GetComponent<RapierPhysics>().Scenes;
+            Quaternion vertical = Quaternion.AngleAxis(90f, Vector3.forward);
+            JointDesc hinge = NetworkJoints.Create(JointKind.Revolute, new Vector3(-0.5f, 0f, 0f), vertical, new Vector3(-0.5f, 1f, 0f), vertical);
+
+            JointHandle joint = scenes.CreateJoint(door, door.Body, default, hinge);
+
+            Assert.IsTrue(joint.IsValid);
+            Assert.Throws<ArgumentException>(() => scenes.CreateJoint(door, default(NetworkBody), default, hinge));
+        }
+
+        [Test]
+        public void TheScenesMoveJoinAndDriveA2DObjectThroughItsNetworkBody2DLikeTheCoreCalls()
+        {
+            NetworkObject moverPrefab = Prefab("Mover2D", BallPrefabId, mover =>
+            {
+                var capsule = mover.AddComponent<CapsuleCollider2D>();
+                capsule.size = new Vector2(0.6f, 1.6f);
+                mover.AddComponent<Rigidbody2D>().bodyType = RigidbodyType2D.Kinematic;
+            });
+            NetworkManager server = Manager(moverPrefab);
+            UseActiveScene2D(server);
+            server.ServerManager.StartConnection(1);
+            NetworkObject mover = Spawn(server, moverPrefab, new Vector3(0f, 2f, 0f));
+            RunFrames(2);
+            RapierScenes scenes = server.GetComponent<RapierPhysics>().Scenes;
+
+            CharacterMove2D core = scenes.MoveCharacter(mover, mover.Body2D.Core, new System.Numerics.Vector2(0.1f, 0f), (float)FrameSeconds, CharacterSettings2D.Default);
+            NetworkCharacterMove2D move = scenes.MoveCharacter(mover, mover.Body2D, new Vector2(0.1f, 0f), (float)FrameSeconds, CharacterSettings2D.Default);
+            NetworkCharacterMove2D filtered = scenes.MoveCharacter(mover, mover.Body2D, new Vector2(0.1f, 0f), (float)FrameSeconds, CharacterSettings2D.Default, QueryFilter.All);
+            JointHandle joint = scenes.CreateJoint(mover, mover.Body2D, default, NetworkJoints.Create2D(JointKind.Revolute, Vector2.zero, 0f, new Vector2(0f, 2f), 0f));
+            var firstCollider = new[] { 0 };
+            EffectorDesc2D belt = EffectorDesc2D.Surface(2f, 0.5f, false, true, true).WithFrame(Vector2.zero, 0f);
+            EffectorHandle effector = scenes.AddEffector(mover, mover.Body2D, firstCollider, belt);
+
+            Assert.AreEqual(0.1f, move.Moved.x, 1e-3f);
+            Assert.AreEqual(core.Moved.X, move.Moved.x, 1e-6f);
+            Assert.AreEqual(core.Moved.Y, move.Moved.y, 1e-6f);
+            Assert.AreEqual(core.Grounded, move.Grounded);
+            Assert.AreEqual(core.Moved.X, filtered.Moved.x, 1e-6f);
+            Assert.IsTrue(joint.IsValid);
+            Assert.IsTrue(effector.IsValid);
+            Assert.Throws<ArgumentException>(() => scenes.AddEffector(mover, mover.Body2D, firstCollider, belt));
+            var unowned = Assert.Throws<ArgumentException>(() => scenes.AddEffector(mover.Body2D, firstCollider, belt));
+            StringAssert.Contains("not an unowned 2D body", unowned.Message);
         }
 
         [Test]

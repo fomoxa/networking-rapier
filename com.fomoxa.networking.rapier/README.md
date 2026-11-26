@@ -53,7 +53,7 @@ The Rapier worlds also support:
 | Feature | Documentation |
 |---|---|
 | Rays, shape casts, overlaps and contact points | [Physics queries](https://github.com/fomoxa/unity-docs/blob/main/physics/queries.md) |
-| Forces, torques and continuous collision | [PhysicsBody](https://github.com/fomoxa/unity-docs/blob/main/physics/physics-body.md) |
+| Forces, torques and continuous collision | [NetworkBody](https://github.com/fomoxa/unity-docs/blob/main/physics/physics-body.md) |
 | Unity's joint components, and joints created from code | [Joints](https://github.com/fomoxa/unity-docs/blob/main/rapier/joints.md) |
 | `MoveCharacter`, a character controller for kinematic bodies | [Character controller](https://github.com/fomoxa/unity-docs/blob/main/rapier/character-controller.md) |
 | `PlatformEffector2D`, `SurfaceEffector2D`, `AreaEffector2D`, `BuoyancyEffector2D`, `PointEffector2D` | [Effectors](https://github.com/fomoxa/unity-docs/blob/main/rapier/effectors.md) |

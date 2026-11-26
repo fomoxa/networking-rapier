@@ -4,6 +4,8 @@ namespace Fomoxa.Unity.Rapier
 {
     internal static class RapierConversion
     {
+        public static System.Numerics.Vector2 ToNumerics(this Vector2 value) => new System.Numerics.Vector2(value.x, value.y);
+
         public static System.Numerics.Vector3 ToNumerics(this Vector3 value) => new System.Numerics.Vector3(value.x, value.y, value.z);
 
         public static System.Numerics.Quaternion ToNumerics(this Quaternion value) => new System.Numerics.Quaternion(value.x, value.y, value.z, value.w);
