@@ -19,6 +19,8 @@ namespace Fomoxa.Networking.Rapier.Tests
     {
         private const uint ArenaSceneId = 0x00A1_E7A0;
         private const uint LobbySceneId = 0x00B0_B000;
+        private static readonly NetworkScene ArenaScene = new NetworkScene(1);
+        private static readonly NetworkScene LobbyScene = new NetworkScene(2);
         private const uint BallPrefabId = 0x0000_0B01;
         private const uint SyncedBallPrefabId = 0x0000_0B02;
         private const float Tick = 1f / 60f;
@@ -28,14 +30,65 @@ namespace Fomoxa.Networking.Rapier.Tests
         {
             using (var scenes = new RapierScenes())
             {
-                scenes.LoadScene(Arena(ArenaSceneId));
-                PhysicsBody ball = scenes.AddBody(Entity(), ArenaSceneId, Ball(new Vector3(0f, 5f, 0f)));
+                scenes.LoadScene(ArenaScene, Arena(ArenaSceneId));
+                PhysicsBody ball = scenes.AddBody(Entity(), ArenaScene, Ball(new Vector3(0f, 5f, 0f)));
 
                 Run(scenes, 300);
 
-                CollectionAssert.AreEqual(new[] { ArenaSceneId }, scenes.SceneIds);
+                CollectionAssert.AreEqual(new[] { ArenaScene }, scenes.Scenes);
                 Assert.AreEqual(0.5f, ball.Position.Y, 0.05f);
                 Assert.AreEqual(PhysicsBackend.Rapier, scenes.Backend);
+            }
+        }
+
+        [Test]
+        public void TwoInstancesOfOneSceneFileGetTwoWorldsAndUnloadAlone()
+        {
+            using (var scenes = new RapierScenes())
+            {
+                scenes.LoadScene(ArenaScene, Arena(ArenaSceneId));
+                scenes.LoadScene(LobbyScene, Arena(ArenaSceneId));
+                PhysicsBody first = scenes.AddBody(Entity(), ArenaScene, Ball(new Vector3(0f, 2f, 0f)));
+                PhysicsBody second = scenes.AddBody(Entity(), LobbyScene, Ball(new Vector3(0f, 2f, 0f)));
+
+                Run(scenes, 120);
+
+                Assert.AreNotSame(scenes.WorldOf(ArenaScene), scenes.WorldOf(LobbyScene));
+                Assert.AreEqual(0.5f, first.Position.Y, 0.05f);
+                Assert.AreEqual(0.5f, second.Position.Y, 0.05f);
+
+                scenes.UnloadScene(ArenaScene);
+                Run(scenes, 60);
+
+                CollectionAssert.AreEqual(new[] { LobbyScene }, scenes.Scenes);
+                Assert.AreEqual(0.5f, second.Position.Y, 0.05f);
+            }
+        }
+
+        [Test]
+        public void TheDefaultWorldHoldsTheFilesOfSeveralScenesAndDropsOneOnItsOwn()
+        {
+            using (var scenes = new RapierScenes())
+            {
+                SceneFile far = Arena(LobbySceneId);
+                far.Colliders[0] = SceneFileGeometry.ToFile(new ColliderDesc(BodyShape.Box(new Vector3(10f, 0.5f, 10f)), new Vector3(100f, -0.5f, 0f), Quaternion.Identity, ColliderMaterial.Default, 0, false));
+                scenes.LoadScene(default, Arena(ArenaSceneId));
+                scenes.LoadScene(default, far);
+                PhysicsBody near = scenes.AddBody(Entity(), default, Ball(new Vector3(0f, 2f, 0f)));
+                PhysicsBody away = scenes.AddBody(Entity(), default, Ball(new Vector3(100f, 2f, 0f)));
+
+                Assert.IsTrue(scenes.TryGetFileStatics(default, LobbySceneId, out StaticGroup statics, out StaticGroup statics2D));
+                Assert.AreEqual((1, 1), (statics.FirstIndex, statics.Count));
+                Assert.IsFalse(statics2D.IsValid);
+                Assert.Throws<ArgumentException>(() => scenes.LoadScene(default, Arena(ArenaSceneId)));
+                Run(scenes, 120);
+                scenes.UnloadSceneFile(LobbySceneId);
+                Run(scenes, 120);
+
+                Assert.AreEqual(0.5f, near.Position.Y, 0.05f);
+                Assert.Less(away.Position.Y, -1f);
+                Assert.IsFalse(scenes.TryGetFileStatics(default, LobbySceneId, out _, out _));
+                CollectionAssert.AreEqual(new[] { default(NetworkScene) }, scenes.Scenes);
             }
         }
 
@@ -44,11 +97,11 @@ namespace Fomoxa.Networking.Rapier.Tests
         {
             using (var scenes = new RapierScenes())
             {
-                scenes.LoadScene(Arena(ArenaSceneId));
+                scenes.LoadScene(ArenaScene, Arena(ArenaSceneId));
                 StandaloneEntity inArena = Entity();
                 StandaloneEntity inLobby = Entity();
-                PhysicsBody resting = scenes.AddBody(inArena, ArenaSceneId, Ball(new Vector3(0f, 2f, 0f)));
-                PhysicsBody falling = scenes.AddBody(inLobby, LobbySceneId, Ball(new Vector3(0f, 2f, 0f)));
+                PhysicsBody resting = scenes.AddBody(inArena, ArenaScene, Ball(new Vector3(0f, 2f, 0f)));
+                PhysicsBody falling = scenes.AddBody(inLobby, LobbyScene, Ball(new Vector3(0f, 2f, 0f)));
                 var worlds = new List<IPhysicsSimulation>();
 
                 Run(scenes, 120);
@@ -56,8 +109,8 @@ namespace Fomoxa.Networking.Rapier.Tests
 
                 Assert.AreEqual(0.5f, resting.Position.Y, 0.05f);
                 Assert.Less(falling.Position.Y, -1f);
-                CollectionAssert.AreEqual(new IPhysicsSimulation[] { scenes.WorldOf(LobbySceneId) }, worlds);
-                CollectionAssert.AreEqual(new[] { ArenaSceneId, LobbySceneId }, scenes.SceneIds);
+                CollectionAssert.AreEqual(new IPhysicsSimulation[] { scenes.WorldOf(LobbyScene) }, worlds);
+                CollectionAssert.AreEqual(new[] { ArenaScene, LobbyScene }, scenes.Scenes);
             }
         }
 
@@ -66,15 +119,15 @@ namespace Fomoxa.Networking.Rapier.Tests
         {
             using (var scenes = new RapierScenes())
             {
-                scenes.LoadScene(Arena(ArenaSceneId));
+                scenes.LoadScene(ArenaScene, Arena(ArenaSceneId));
                 StandaloneEntity left = Entity();
-                PhysicsBody first = scenes.AddBody(left, ArenaSceneId, Ball(Vector3.Zero));
-                PhysicsBody second = scenes.AddBody(left, ArenaSceneId, Ball(Vector3.UnitX * 3f));
-                PhysicsBody other = scenes.AddBody(Entity(), ArenaSceneId, Ball(Vector3.UnitX * 6f));
+                PhysicsBody first = scenes.AddBody(left, ArenaScene, Ball(Vector3.Zero));
+                PhysicsBody second = scenes.AddBody(left, ArenaScene, Ball(Vector3.UnitX * 3f));
+                PhysicsBody other = scenes.AddBody(Entity(), ArenaScene, Ball(Vector3.UnitX * 6f));
 
                 scenes.RemoveBodies(left);
                 bool otherBeforeUnload = other.IsValid;
-                scenes.UnloadScene(ArenaSceneId);
+                scenes.UnloadScene(ArenaScene);
                 var stepping = new List<IPhysicsSimulation>();
                 scenes.WorldsToStep(stepping);
 
@@ -83,7 +136,7 @@ namespace Fomoxa.Networking.Rapier.Tests
                 Assert.IsTrue(otherBeforeUnload);
                 Assert.IsFalse(other.IsValid);
                 Assert.IsEmpty(stepping);
-                CollectionAssert.IsEmpty(scenes.SceneIds);
+                CollectionAssert.IsEmpty(scenes.Scenes);
             }
         }
 
@@ -92,16 +145,16 @@ namespace Fomoxa.Networking.Rapier.Tests
         {
             using (var scenes = new RapierScenes())
             {
-                scenes.LoadScene(Arena(ArenaSceneId));
+                scenes.LoadScene(ArenaScene, Arena(ArenaSceneId));
                 StandaloneEntity falling = Entity();
                 StandaloneEntity removed = Entity();
                 StandaloneEntity unowned = Entity();
                 StandaloneEntity flat = Entity();
-                scenes.AddBody(falling, ArenaSceneId, Ball(new Vector3(0f, 3f, 0f)));
-                scenes.AddBody2D(flat, ArenaSceneId, new BodyDesc2D(BodyKind.Dynamic, BodyShape2D.Circle(0.5f), new Vector2(0f, 3f), 0f, 1f));
-                scenes.AddBody(falling, ArenaSceneId, Ball(new Vector3(0f, 5f, 0f)));
-                scenes.AddBody(removed, ArenaSceneId, Ball(new Vector3(4f, 3f, 0f)));
-                scenes.AddBody(ArenaSceneId, Ball(new Vector3(-4f, 3f, 0f)));
+                scenes.AddBody(falling, ArenaScene, Ball(new Vector3(0f, 3f, 0f)));
+                scenes.AddBody2D(flat, ArenaScene, new BodyDesc2D(BodyKind.Dynamic, BodyShape2D.Circle(0.5f), new Vector2(0f, 3f), 0f, 1f));
+                scenes.AddBody(falling, ArenaScene, Ball(new Vector3(0f, 5f, 0f)));
+                scenes.AddBody(removed, ArenaScene, Ball(new Vector3(4f, 3f, 0f)));
+                scenes.AddBody(ArenaScene, Ball(new Vector3(-4f, 3f, 0f)));
 
                 Run(scenes, 1);
                 List<INetworkEntity> moving = Moved(scenes);
@@ -110,7 +163,7 @@ namespace Fomoxa.Networking.Rapier.Tests
                 bool removedReports = scenes.ReportsMotion(removed);
                 List<INetworkEntity> onceRemoved = Moved(scenes);
                 bool fallingReportsBeforeUnload = scenes.ReportsMotion(falling);
-                scenes.UnloadScene(ArenaSceneId);
+                scenes.UnloadScene(ArenaScene);
                 List<INetworkEntity> afterUnload = Moved(scenes);
 
                 CollectionAssert.AreEquivalent(new[] { falling, falling, removed, flat }, moving);
@@ -129,10 +182,10 @@ namespace Fomoxa.Networking.Rapier.Tests
         {
             using (var scenes = new RapierScenes())
             {
-                scenes.LoadScene(Arena(ArenaSceneId));
+                scenes.LoadScene(ArenaScene, Arena(ArenaSceneId));
                 StandaloneEntity entity = Entity();
-                scenes.AddBody(entity, ArenaSceneId, Ball(new Vector3(0f, 1f, 0f)));
-                RapierWorld world = scenes.WorldOf(ArenaSceneId);
+                scenes.AddBody(entity, ArenaScene, Ball(new Vector3(0f, 1f, 0f)));
+                RapierWorld world = scenes.WorldOf(ArenaScene);
                 Run(scenes, 60);
                 var touching = new List<RapierCollider>();
 
@@ -154,8 +207,8 @@ namespace Fomoxa.Networking.Rapier.Tests
             using (var scenes = new RapierScenes())
             {
                 StandaloneEntity entity = Entity();
-                PhysicsBody body = scenes.AddBody(entity, ArenaSceneId, Ball(Vector3.Zero));
-                RapierWorld world = scenes.WorldOf(ArenaSceneId);
+                PhysicsBody body = scenes.AddBody(entity, ArenaScene, Ball(Vector3.Zero));
+                RapierWorld world = scenes.WorldOf(ArenaScene);
                 PhysicsHistory history = scenes.HistoryOf(world, 4);
 
                 scenes.PlaceProxy(entity, body);
@@ -179,10 +232,10 @@ namespace Fomoxa.Networking.Rapier.Tests
             using (var scenes = new RapierScenes())
             {
                 StandaloneEntity entity = Entity();
-                PhysicsBody root = scenes.AddBody(entity, ArenaSceneId, Ball(Vector3.Zero));
-                PhysicsBody limb = scenes.AddBody(entity, ArenaSceneId, Ball(new Vector3(3f, 0f, 0f)));
-                PhysicsBody2D tail = scenes.AddBody2D(entity, ArenaSceneId, new BodyDesc2D(BodyKind.Dynamic, BodyShape2D.Circle(0.5f), Vector2.Zero, 0f, 1f));
-                PhysicsBody other = scenes.AddBody(Entity(), ArenaSceneId, Ball(new Vector3(6f, 0f, 0f)));
+                PhysicsBody root = scenes.AddBody(entity, ArenaScene, Ball(Vector3.Zero));
+                PhysicsBody limb = scenes.AddBody(entity, ArenaScene, Ball(new Vector3(3f, 0f, 0f)));
+                PhysicsBody2D tail = scenes.AddBody2D(entity, ArenaScene, new BodyDesc2D(BodyKind.Dynamic, BodyShape2D.Circle(0.5f), Vector2.Zero, 0f, 1f));
+                PhysicsBody other = scenes.AddBody(Entity(), ArenaScene, Ball(new Vector3(6f, 0f, 0f)));
 
                 scenes.PlaceProxy(entity, limb);
                 scenes.PlaceProxy(entity, other);
@@ -200,10 +253,10 @@ namespace Fomoxa.Networking.Rapier.Tests
             using (var scenes = new RapierScenes())
             {
                 StandaloneEntity entity = Entity();
-                PhysicsBody root = scenes.AddBody(entity, ArenaSceneId, Ball(new Vector3(0f, 5f, 0f)));
-                PhysicsBody limb = scenes.AddBody(entity, ArenaSceneId, Ball(new Vector3(2f, 5f, 0f)));
-                PhysicsBody stranger = scenes.AddBody(Entity(), ArenaSceneId, Ball(new Vector3(6f, 5f, 0f)));
-                RapierWorld world = scenes.WorldOf(ArenaSceneId);
+                PhysicsBody root = scenes.AddBody(entity, ArenaScene, Ball(new Vector3(0f, 5f, 0f)));
+                PhysicsBody limb = scenes.AddBody(entity, ArenaScene, Ball(new Vector3(2f, 5f, 0f)));
+                PhysicsBody stranger = scenes.AddBody(Entity(), ArenaScene, Ball(new Vector3(6f, 5f, 0f)));
+                RapierWorld world = scenes.WorldOf(ArenaScene);
 
                 JointHandle joint = scenes.CreateJoint(entity, root, limb, JointDesc.Rope(Vector3.Zero, Vector3.Zero, 2f));
                 JointHandle anchored = scenes.CreateJoint(entity, root, default, JointDesc.Rope(Vector3.Zero, new Vector3(0f, 6f, 0f), 1f));
@@ -229,10 +282,10 @@ namespace Fomoxa.Networking.Rapier.Tests
                 StandaloneEntity entity = Entity();
                 StandaloneEntity other = Entity();
                 var capsule = new ColliderDesc(BodyShape.Capsule(0.3f, 0.5f), Vector3.Zero, Quaternion.Identity, ColliderMaterial.Default, 0, false);
-                PhysicsBody character = scenes.AddBody(entity, ArenaSceneId, new BodyDesc(BodyKind.Kinematic, new[] { capsule }, new Vector3(0f, 5f, 0f), Quaternion.Identity, 1f));
-                PhysicsBody stranger = scenes.AddBody(other, ArenaSceneId, new BodyDesc(BodyKind.Kinematic, new[] { capsule }, new Vector3(5f, 5f, 0f), Quaternion.Identity, 1f));
+                PhysicsBody character = scenes.AddBody(entity, ArenaScene, new BodyDesc(BodyKind.Kinematic, new[] { capsule }, new Vector3(0f, 5f, 0f), Quaternion.Identity, 1f));
+                PhysicsBody stranger = scenes.AddBody(other, ArenaScene, new BodyDesc(BodyKind.Kinematic, new[] { capsule }, new Vector3(5f, 5f, 0f), Quaternion.Identity, 1f));
                 var flat = new ColliderDesc2D(BodyShape2D.Capsule(0.3f, 0.5f), Vector2.Zero, 0f, ColliderMaterial.Default, 0, false);
-                PhysicsBody2D character2D = scenes.AddBody2D(entity, ArenaSceneId, new BodyDesc2D(BodyKind.Kinematic, new[] { flat }, new Vector2(0f, 5f), 0f, 1f));
+                PhysicsBody2D character2D = scenes.AddBody2D(entity, ArenaScene, new BodyDesc2D(BodyKind.Kinematic, new[] { flat }, new Vector2(0f, 5f), 0f, 1f));
 
                 CharacterMove move = scenes.MoveCharacter(entity, character, new Vector3(1f, 0f, 0f), 1f / 60f, CharacterSettings.Default);
                 CharacterMove2D move2D = scenes.MoveCharacter(entity, character2D, new Vector2(1f, 0f), 1f / 60f, CharacterSettings2D.Default);
@@ -256,7 +309,7 @@ namespace Fomoxa.Networking.Rapier.Tests
                 Vector3[] point = { Vector3.One, Vector3.One, Vector3.One, Vector3.One };
                 broken.Colliders.Add(SceneFileGeometry.ToFile(new ColliderDesc(BodyShape.ConvexHull(point), Vector3.Zero, Quaternion.Identity, ColliderMaterial.Default, 0, false)));
 
-                InvalidDataException exception = Assert.Throws<InvalidDataException>(() => scenes.LoadScene(broken));
+                InvalidDataException exception = Assert.Throws<InvalidDataException>(() => scenes.LoadScene(LobbyScene, broken));
                 StringAssert.Contains("export the scene again", exception.Message);
             }
         }
@@ -336,21 +389,21 @@ namespace Fomoxa.Networking.Rapier.Tests
                 StandaloneEntity entity = Entity();
                 StandaloneEntity other = Entity();
                 var zone = new ColliderDesc2D(BodyShape2D.Box(new Vector2(3f, 3f)), Vector2.Zero, 0f, ColliderMaterial.Default, 0, true);
-                PhysicsBody2D pad = scenes.AddBody2D(entity, ArenaSceneId, new BodyDesc2D(BodyKind.Kinematic, new[] { zone }, Vector2.Zero, 0f, 0f));
-                PhysicsBody2D ball = scenes.AddBody2D(other, ArenaSceneId, new BodyDesc2D(BodyKind.Dynamic, BodyShape2D.Circle(0.25f), Vector2.Zero, 0f, 1f));
+                PhysicsBody2D pad = scenes.AddBody2D(entity, ArenaScene, new BodyDesc2D(BodyKind.Kinematic, new[] { zone }, Vector2.Zero, 0f, 0f));
+                PhysicsBody2D ball = scenes.AddBody2D(other, ArenaScene, new BodyDesc2D(BodyKind.Dynamic, BodyShape2D.Circle(0.25f), Vector2.Zero, 0f, 1f));
                 EffectorDesc2D push = EffectorDesc2D.Area(0f, true, 10f, EffectorSelection.Rigidbody, 0f, 0f);
 
                 EffectorHandle effector = scenes.AddEffector(entity, pad, new[] { 0 }, push);
                 Run(scenes, 30);
 
-                Assert.IsTrue(scenes.WorldOf2D(ArenaSceneId).Contains(effector));
+                Assert.IsTrue(scenes.WorldOf2D(ArenaScene).Contains(effector));
                 Assert.Greater(ball.Position.X, 0.5f);
                 Assert.Throws<ArgumentException>(() => scenes.AddEffector(entity, ball, new[] { 0 }, push));
                 Assert.Throws<ArgumentException>(() => scenes.AddEffector(entity, default, new[] { 0 }, push));
 
                 scenes.RemoveBodies(entity);
 
-                Assert.IsFalse(scenes.WorldOf2D(ArenaSceneId).Contains(effector));
+                Assert.IsFalse(scenes.WorldOf2D(ArenaScene).Contains(effector));
             }
         }
 
@@ -359,18 +412,18 @@ namespace Fomoxa.Networking.Rapier.Tests
         {
             using (var scenes = new RapierScenes())
             {
-                scenes.LoadScene(Flatland(ArenaSceneId));
+                scenes.LoadScene(ArenaScene, Flatland(ArenaSceneId));
                 var zone = new ColliderDesc2D(BodyShape2D.Box(new Vector2(2f, 2f)), new Vector2(-6f, 3f), 0f, ColliderMaterial.Default, 0, true);
-                StaticGroup wind = scenes.AddStatic2D(ArenaSceneId, new[] { zone });
+                StaticGroup wind = scenes.AddStatic2D(ArenaScene, new[] { zone });
                 EffectorHandle gust = scenes.AddEffector(wind, new[] { 0 }, EffectorDesc2D.Area(0f, true, 10f, EffectorSelection.Rigidbody, 0f, 0f));
-                PhysicsBody2D belt = scenes.AddBody2D(ArenaSceneId, new BodyDesc2D(BodyKind.Kinematic, BodyShape2D.Box(new Vector2(3f, 0.25f)), new Vector2(5f, 1f), 0f, 0f));
+                PhysicsBody2D belt = scenes.AddBody2D(ArenaScene, new BodyDesc2D(BodyKind.Kinematic, BodyShape2D.Box(new Vector2(3f, 0.25f)), new Vector2(5f, 1f), 0f, 0f));
                 EffectorHandle carry = scenes.AddEffector(belt, new[] { 0 }, EffectorDesc2D.Surface(2f, 0.5f, false, true, true));
                 var floating = new BodyMotion2D(BodyLocks2D.None, 0f, 0f, 0f);
-                PhysicsBody2D kite = scenes.AddBody2D(ArenaSceneId, new BodyDesc2D(BodyKind.Dynamic, new[] { new ColliderDesc2D(BodyShape2D.Circle(0.25f), Vector2.Zero, 0f, ColliderMaterial.Default, 0, false) }, new Vector2(-6f, 3f), 0f, 1f, floating));
-                PhysicsBody2D crate = scenes.AddBody2D(ArenaSceneId, new BodyDesc2D(BodyKind.Dynamic, BodyShape2D.Box(new Vector2(0.5f, 0.5f)), new Vector2(5f, 1.75f), 0f, 1f));
-                PhysicsBody2D owned = scenes.AddBody2D(Entity(), ArenaSceneId, new BodyDesc2D(BodyKind.Kinematic, BodyShape2D.Box(Vector2.One), new Vector2(0f, 8f), 0f, 0f));
-                StaticGroup solid = scenes.AddStatic(LobbySceneId, new[] { new ColliderDesc(BodyShape.Box(Vector3.One), Vector3.Zero, Quaternion.Identity, ColliderMaterial.Default, 0, false) });
-                RapierWorld2D world = scenes.WorldOf2D(ArenaSceneId);
+                PhysicsBody2D kite = scenes.AddBody2D(ArenaScene, new BodyDesc2D(BodyKind.Dynamic, new[] { new ColliderDesc2D(BodyShape2D.Circle(0.25f), Vector2.Zero, 0f, ColliderMaterial.Default, 0, false) }, new Vector2(-6f, 3f), 0f, 1f, floating));
+                PhysicsBody2D crate = scenes.AddBody2D(ArenaScene, new BodyDesc2D(BodyKind.Dynamic, BodyShape2D.Box(new Vector2(0.5f, 0.5f)), new Vector2(5f, 1.75f), 0f, 1f));
+                PhysicsBody2D owned = scenes.AddBody2D(Entity(), ArenaScene, new BodyDesc2D(BodyKind.Kinematic, BodyShape2D.Box(Vector2.One), new Vector2(0f, 8f), 0f, 0f));
+                StaticGroup solid = scenes.AddStatic(LobbyScene, new[] { new ColliderDesc(BodyShape.Box(Vector3.One), Vector3.Zero, Quaternion.Identity, ColliderMaterial.Default, 0, false) });
+                RapierWorld2D world = scenes.WorldOf2D(ArenaScene);
 
                 Run(scenes, 60);
 
@@ -399,9 +452,9 @@ namespace Fomoxa.Networking.Rapier.Tests
                 unknown.Colliders2D[0].Effector = 1;
                 unknown.Effectors2D.Add(new SceneFileEffector2D { Kind = 9 });
 
-                StringAssert.Contains("export the scene again", Assert.Throws<InvalidDataException>(() => scenes.LoadScene(missing)).Message);
-                StringAssert.Contains("export the scene again", Assert.Throws<InvalidDataException>(() => scenes.LoadScene(unknown)).Message);
-                CollectionAssert.IsEmpty(scenes.SceneIds2D);
+                StringAssert.Contains("export the scene again", Assert.Throws<InvalidDataException>(() => scenes.LoadScene(LobbyScene, missing)).Message);
+                StringAssert.Contains("export the scene again", Assert.Throws<InvalidDataException>(() => scenes.LoadScene(LobbyScene, unknown)).Message);
+                CollectionAssert.IsEmpty(scenes.Scenes2D);
             }
         }
 
@@ -449,7 +502,7 @@ namespace Fomoxa.Networking.Rapier.Tests
                 Assert.AreEqual(0.5f, ball.Position.Y, 0.05f);
                 Assert.IsTrue(onClient.Body.IsValid);
                 Assert.IsTrue(onClient.Body.IsKinematic);
-                CollectionAssert.AreEqual(new[] { ArenaSceneId }, clientPhysics.SceneIds);
+                CollectionAssert.AreEqual(new[] { arena }, clientPhysics.Scenes);
             }
         }
 
@@ -491,9 +544,9 @@ namespace Fomoxa.Networking.Rapier.Tests
                 server.ServerManager.StartConnection(7777);
                 client.ClientManager.StartConnection("127.0.0.1", 7777);
                 Frames(10);
-                server.ServerManager.Scenes.LoadGlobal(new[] { ArenaSceneId });
+                NetworkScene arena = server.ServerManager.Scenes.LoadGlobal(new[] { ArenaSceneId })[0];
                 Frames(10);
-                var ball = new SyncedBall { SceneId = ArenaSceneId, Position = new Vector3(0f, 3f, 0f) };
+                var ball = new SyncedBall { Scene = arena, Position = new Vector3(0f, 3f, 0f) };
                 server.ServerManager.Spawn(ball);
                 Frames(20);
                 int whileFalling = Received(onClient).Count;
@@ -525,9 +578,9 @@ namespace Fomoxa.Networking.Rapier.Tests
         {
             using (var scenes = new RapierScenes())
             {
-                scenes.LoadScene(Flatland(ArenaSceneId));
+                scenes.LoadScene(ArenaScene, Flatland(ArenaSceneId));
                 StandaloneEntity entity = Entity();
-                PhysicsBody2D crate = scenes.AddBody2D(entity, ArenaSceneId, new BodyDesc2D(BodyKind.Dynamic, BodyShape2D.Box(new Vector2(0.5f)), new Vector2(0f, 4f), 0f, 1f));
+                PhysicsBody2D crate = scenes.AddBody2D(entity, ArenaScene, new BodyDesc2D(BodyKind.Dynamic, BodyShape2D.Box(new Vector2(0.5f)), new Vector2(0f, 4f), 0f, 1f));
                 var worlds = new List<IPhysicsSimulation>();
                 var stepping = new List<IPhysicsSimulation>();
 
@@ -536,10 +589,10 @@ namespace Fomoxa.Networking.Rapier.Tests
                 scenes.WorldsToStep(stepping);
 
                 Assert.AreEqual(0.5f, crate.Position.Y, 0.05f);
-                CollectionAssert.AreEqual(new IPhysicsSimulation[] { scenes.WorldOf2D(ArenaSceneId) }, worlds);
-                CollectionAssert.AreEqual(new IPhysicsSimulation[] { scenes.WorldOf2D(ArenaSceneId) }, stepping);
-                CollectionAssert.IsEmpty(scenes.SceneIds);
-                CollectionAssert.AreEqual(new[] { ArenaSceneId }, scenes.SceneIds2D);
+                CollectionAssert.AreEqual(new IPhysicsSimulation[] { scenes.WorldOf2D(ArenaScene) }, worlds);
+                CollectionAssert.AreEqual(new IPhysicsSimulation[] { scenes.WorldOf2D(ArenaScene) }, stepping);
+                CollectionAssert.IsEmpty(scenes.Scenes);
+                CollectionAssert.AreEqual(new[] { ArenaScene }, scenes.Scenes2D);
             }
         }
 
@@ -554,10 +607,10 @@ namespace Fomoxa.Networking.Rapier.Tests
                     file.LayerCollisions2D.Add(layer == 2 ? ~(1u << 3) : layer == 3 ? ~(1u << 2) : uint.MaxValue);
                 }
 
-                scenes.LoadScene(file);
-                bool twoDimensionalBeforeBodies = scenes.SceneIds2D.GetEnumerator().MoveNext();
-                PhysicsBody2D floor = scenes.AddBody2D(Entity(), ArenaSceneId, new BodyDesc2D(BodyKind.Static, new[] { new ColliderDesc2D(BodyShape2D.Box(new Vector2(10f, 0.5f)), Vector2.Zero, 0f, ColliderMaterial.Default, 2, false) }, new Vector2(0f, -0.5f), 0f, 0f));
-                PhysicsBody2D ghost = scenes.AddBody2D(Entity(), ArenaSceneId, new BodyDesc2D(BodyKind.Dynamic, new[] { new ColliderDesc2D(BodyShape2D.Circle(0.5f), Vector2.Zero, 0f, ColliderMaterial.Default, 3, false) }, new Vector2(0f, 2f), 0f, 1f));
+                scenes.LoadScene(ArenaScene, file);
+                bool twoDimensionalBeforeBodies = scenes.Scenes2D.GetEnumerator().MoveNext();
+                PhysicsBody2D floor = scenes.AddBody2D(Entity(), ArenaScene, new BodyDesc2D(BodyKind.Static, new[] { new ColliderDesc2D(BodyShape2D.Box(new Vector2(10f, 0.5f)), Vector2.Zero, 0f, ColliderMaterial.Default, 2, false) }, new Vector2(0f, -0.5f), 0f, 0f));
+                PhysicsBody2D ghost = scenes.AddBody2D(Entity(), ArenaScene, new BodyDesc2D(BodyKind.Dynamic, new[] { new ColliderDesc2D(BodyShape2D.Circle(0.5f), Vector2.Zero, 0f, ColliderMaterial.Default, 3, false) }, new Vector2(0f, 2f), 0f, 1f));
 
                 Run(scenes, 120);
 
@@ -605,7 +658,7 @@ namespace Fomoxa.Networking.Rapier.Tests
                 server.ServerManager.StartConnection(7777);
                 client.ClientManager.StartConnection("127.0.0.1", 7777);
                 Frames(10);
-                server.ServerManager.Scenes.LoadGlobal(new[] { ArenaSceneId });
+                NetworkScene arena = server.ServerManager.Scenes.LoadGlobal(new[] { ArenaSceneId })[0];
                 Frames(240);
 
                 StandaloneEntity crate = null;
@@ -618,7 +671,7 @@ namespace Fomoxa.Networking.Rapier.Tests
                 Assert.IsNotNull(crate);
                 Assert.IsTrue(crate.Body2D.IsValid);
                 Assert.AreEqual(0.5f, crate.Position.Y, 0.05f);
-                CollectionAssert.AreEqual(new[] { ArenaSceneId }, clientPhysics.SceneIds2D);
+                CollectionAssert.AreEqual(new[] { arena }, clientPhysics.Scenes2D);
             }
         }
 
@@ -627,19 +680,19 @@ namespace Fomoxa.Networking.Rapier.Tests
         {
             using (var scenes = new RapierScenes())
             {
-                scenes.LoadScene(Flatland(ArenaSceneId));
-                StaticGroup ledge = scenes.AddStatic2D(ArenaSceneId, new[] { new ColliderDesc2D(BodyShape2D.Box(new Vector2(1f, 0.5f)), new Vector2(20f, 2f), 0f, ColliderMaterial.Default, 0, false) });
-                StaticGroup floor = scenes.AddStatic(LobbySceneId, new[] { new ColliderDesc(BodyShape.Box(new Vector3(10f, 0.5f, 10f)), new Vector3(0f, -0.5f, 0f), Quaternion.Identity, ColliderMaterial.Default, 0, false) });
-                PhysicsBody2D crate = scenes.AddBody2D(ArenaSceneId, new BodyDesc2D(BodyKind.Dynamic, BodyShape2D.Box(new Vector2(0.5f, 0.5f)), new Vector2(20f, 5f), 0f, 1f));
+                scenes.LoadScene(ArenaScene, Flatland(ArenaSceneId));
+                StaticGroup ledge = scenes.AddStatic2D(ArenaScene, new[] { new ColliderDesc2D(BodyShape2D.Box(new Vector2(1f, 0.5f)), new Vector2(20f, 2f), 0f, ColliderMaterial.Default, 0, false) });
+                StaticGroup floor = scenes.AddStatic(LobbyScene, new[] { new ColliderDesc(BodyShape.Box(new Vector3(10f, 0.5f, 10f)), new Vector3(0f, -0.5f, 0f), Quaternion.Identity, ColliderMaterial.Default, 0, false) });
+                PhysicsBody2D crate = scenes.AddBody2D(ArenaScene, new BodyDesc2D(BodyKind.Dynamic, BodyShape2D.Box(new Vector2(0.5f, 0.5f)), new Vector2(20f, 5f), 0f, 1f));
 
                 Run(scenes, 120);
 
-                Assert.AreEqual((ArenaSceneId, 1, 1), (ledge.SceneId, ledge.FirstIndex, ledge.Count));
-                Assert.AreEqual((LobbySceneId, 0, 1), (floor.SceneId, floor.FirstIndex, floor.Count));
+                Assert.AreEqual((ArenaScene, 1, 1), (ledge.Scene, ledge.FirstIndex, ledge.Count));
+                Assert.AreEqual((LobbyScene, 0, 1), (floor.Scene, floor.FirstIndex, floor.Count));
                 Assert.AreNotEqual(ledge.Id, floor.Id);
                 Assert.AreEqual(3f, crate.Position.Y, 0.05f);
                 var touching = new List<RapierCollider>();
-                scenes.WorldOf2D(ArenaSceneId).Touching(RapierCollider.Static(ledge.FirstIndex), touching);
+                scenes.WorldOf2D(ArenaScene).Touching(RapierCollider.Static(ledge.FirstIndex), touching);
                 Assert.AreEqual(1, touching.Count);
 
                 scenes.RemoveStatic(ledge);
@@ -654,13 +707,13 @@ namespace Fomoxa.Networking.Rapier.Tests
         {
             using (var scenes = new RapierScenes())
             {
-                scenes.LoadScene(Flatland(ArenaSceneId));
-                StaticGroup ledge = scenes.AddStatic2D(ArenaSceneId, new[] { new ColliderDesc2D(BodyShape2D.Box(Vector2.One), new Vector2(5f, 5f), 0f, ColliderMaterial.Default, 0, false) });
-                PhysicsBody2D lift = scenes.AddBody2D(ArenaSceneId, new BodyDesc2D(BodyKind.Kinematic, BodyShape2D.Box(Vector2.One), new Vector2(-5f, 1f), 0f, 0f));
-                PhysicsBody2D crate = scenes.AddBody2D(ArenaSceneId, new BodyDesc2D(BodyKind.Dynamic, BodyShape2D.Box(new Vector2(0.5f, 0.5f)), new Vector2(-8f, 1f), 0f, 1f));
-                PhysicsBody ball = scenes.AddBody(LobbySceneId, Ball(Vector3.Zero));
+                scenes.LoadScene(ArenaScene, Flatland(ArenaSceneId));
+                StaticGroup ledge = scenes.AddStatic2D(ArenaScene, new[] { new ColliderDesc2D(BodyShape2D.Box(Vector2.One), new Vector2(5f, 5f), 0f, ColliderMaterial.Default, 0, false) });
+                PhysicsBody2D lift = scenes.AddBody2D(ArenaScene, new BodyDesc2D(BodyKind.Kinematic, BodyShape2D.Box(Vector2.One), new Vector2(-5f, 1f), 0f, 0f));
+                PhysicsBody2D crate = scenes.AddBody2D(ArenaScene, new BodyDesc2D(BodyKind.Dynamic, BodyShape2D.Box(new Vector2(0.5f, 0.5f)), new Vector2(-8f, 1f), 0f, 1f));
+                PhysicsBody ball = scenes.AddBody(LobbyScene, Ball(Vector3.Zero));
                 StandaloneEntity entity = Entity();
-                scenes.AddBody(entity, ArenaSceneId, Ball(Vector3.Zero));
+                scenes.AddBody(entity, ArenaScene, Ball(Vector3.Zero));
                 var worlds = new List<IPhysicsSimulation>();
                 var stepping = new List<IPhysicsSimulation>();
 
@@ -670,13 +723,13 @@ namespace Fomoxa.Networking.Rapier.Tests
                 scenes.RemoveBody2D(lift);
                 scenes.RemoveBody2D(lift);
 
-                CollectionAssert.AreEqual(new IPhysicsSimulation[] { scenes.WorldOf(ArenaSceneId) }, worlds);
-                CollectionAssert.Contains(stepping, scenes.WorldOf(LobbySceneId));
+                CollectionAssert.AreEqual(new IPhysicsSimulation[] { scenes.WorldOf(ArenaScene) }, worlds);
+                CollectionAssert.Contains(stepping, scenes.WorldOf(LobbyScene));
                 Assert.IsFalse(lift.IsValid);
                 Assert.IsTrue(crate.IsValid);
                 Assert.IsTrue(ball.IsValid);
 
-                scenes.UnloadScene(ArenaSceneId);
+                scenes.UnloadScene(ArenaScene);
 
                 Assert.IsFalse(crate.IsValid);
                 Assert.DoesNotThrow(() => scenes.RemoveStatic(ledge));
@@ -788,9 +841,9 @@ namespace Fomoxa.Networking.Rapier.Tests
                 server.ServerManager.StartConnection(7777);
                 client.ClientManager.StartConnection("127.0.0.1", 7777);
                 Frames(10);
-                server.ServerManager.Scenes.LoadGlobal(new[] { ArenaSceneId });
+                NetworkScene arena = server.ServerManager.Scenes.LoadGlobal(new[] { ArenaSceneId })[0];
                 Frames(10);
-                var ball = new SyncedBall { SceneId = ArenaSceneId, Position = new Vector3(0f, 3f, 0f) };
+                var ball = new SyncedBall { Scene = arena, Position = new Vector3(0f, 3f, 0f) };
                 server.ServerManager.Spawn(ball);
                 Frames(600);
                 List<TransformSample> received = Received(onClient);

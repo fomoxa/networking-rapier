@@ -34,8 +34,8 @@ namespace Fomoxa.Networking.Rapier.TwoSidedServer
             int ballContacts = 0;
             using (var physics = new RapierScenes(Vector3.Zero))
             {
-                physics.LoadScene(TwoSidedScenario.Arena(0));
-                RapierWorld world = physics.WorldOf(0);
+                physics.LoadScene(default, TwoSidedScenario.Arena(0));
+                RapierWorld world = physics.WorldOf(default);
                 var prefabs = new StandalonePrefabs();
                 prefabs.Register(TwoSidedScenario.BallPrefabId, TwoSidedScenario.BallFingerprint, () => BallEntity.Create(-1, () => world.StateHash, record));
                 var settings = new NetworkSettings { TickRate = TwoSidedScenario.TickRate, PhysicsBackend = PhysicsBackend.Rapier, ReconcileInterval = 1 };

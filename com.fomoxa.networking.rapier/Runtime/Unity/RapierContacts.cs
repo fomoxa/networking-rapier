@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Fomoxa.Networking;
 using Fomoxa.Networking.Rapier;
 using Fomoxa.Networking.Simulation;
 using UnityEngine;
@@ -16,7 +17,7 @@ namespace Fomoxa.Unity.Rapier
         private readonly Dictionary<Collider, Place> places = new Dictionary<Collider, Place>();
         private readonly Dictionary<Collider2D, Place> places2D = new Dictionary<Collider2D, Place>();
         private readonly Dictionary<NetworkObject, BodyColliders> bodies = new Dictionary<NetworkObject, BodyColliders>();
-        private readonly Dictionary<uint, SceneColliders> loaded = new Dictionary<uint, SceneColliders>();
+        private readonly Dictionary<Scene, SceneColliders> loaded = new Dictionary<Scene, SceneColliders>();
         private readonly Dictionary<int, GroupColliders> groups = new Dictionary<int, GroupColliders>();
         private readonly List<int> leavingGroups = new List<int>();
         private readonly List<RapierCollider> touched = new List<RapierCollider>();
@@ -106,19 +107,20 @@ namespace Fomoxa.Unity.Rapier
             }
         }
 
-        public void LoadScene(Scene scene, uint sceneId, RapierWorld world, int colliderCount, RapierWorld2D world2D, int colliderCount2D)
+        public void LoadScene(Scene scene, RapierWorld world, StaticGroup statics, RapierWorld2D world2D, StaticGroup statics2D)
         {
             var entry = new SceneColliders();
-            loaded[sceneId] = entry;
+            loaded[scene] = entry;
             if (world != null)
             {
                 var sources = new List<Collider>();
                 BodyDescriptions.StaticColliders(scene, sources);
-                if (sources.Count == colliderCount)
+                if (sources.Count == statics.Count)
                 {
                     entry.World = world;
-                    statics[world] = sources;
-                    Locate(sources, world, default, places);
+                    entry.Sources = sources;
+                    entry.FirstIndex = statics.FirstIndex;
+                    Index(world, sources, statics.FirstIndex);
                     ContactTracker<Collider> tracker = TrackerFor(world);
                     foreach (GameObject root in scene.GetRootGameObjects())
                     {
@@ -131,7 +133,7 @@ namespace Fomoxa.Unity.Rapier
                 }
                 else
                 {
-                    Mismatch(scene, "3D", sources.Count, colliderCount);
+                    Mismatch(scene, "3D", sources.Count, statics.Count);
                 }
             }
 
@@ -139,11 +141,12 @@ namespace Fomoxa.Unity.Rapier
             {
                 var sources2D = new List<Collider2D>();
                 BodyDescriptions.StaticColliders2D(scene, sources2D);
-                if (sources2D.Count == colliderCount2D)
+                if (sources2D.Count == statics2D.Count)
                 {
                     entry.World2D = world2D;
-                    statics2D[world2D] = sources2D;
-                    Locate(sources2D, world2D, default, places2D);
+                    entry.Sources2D = sources2D;
+                    entry.FirstIndex2D = statics2D.FirstIndex;
+                    Index2D(world2D, sources2D, statics2D.FirstIndex);
                     ContactTracker<Collider2D> tracker2D = TrackerFor2D(world2D);
                     foreach (GameObject root in scene.GetRootGameObjects())
                     {
@@ -156,9 +159,33 @@ namespace Fomoxa.Unity.Rapier
                 }
                 else
                 {
-                    Mismatch(scene, "2D", sources2D.Count, colliderCount2D);
+                    Mismatch(scene, "2D", sources2D.Count, statics2D.Count);
                 }
             }
+        }
+
+        private void Index(RapierWorld world, List<Collider> sources, int firstIndex)
+        {
+            if (!statics.TryGetValue(world, out List<Collider> indexed))
+            {
+                indexed = new List<Collider>();
+                statics.Add(world, indexed);
+            }
+
+            Assign(indexed, firstIndex, sources);
+            Locate(sources, world, default, places, firstIndex);
+        }
+
+        private void Index2D(RapierWorld2D world, List<Collider2D> sources, int firstIndex)
+        {
+            if (!statics2D.TryGetValue(world, out List<Collider2D> indexed))
+            {
+                indexed = new List<Collider2D>();
+                statics2D.Add(world, indexed);
+            }
+
+            Assign(indexed, firstIndex, sources);
+            Locate(sources, world, default, places2D, firstIndex);
         }
 
         public void AddGroup(StaticGroup group, RapierWorld world, List<Collider> sources, GameObject root)
@@ -171,7 +198,7 @@ namespace Fomoxa.Unity.Rapier
 
             Assign(indexed, group.FirstIndex, sources);
             Locate(sources, world, default, places, group.FirstIndex);
-            var entry = new GroupColliders { SceneId = group.SceneId, World = world, Sources = sources, FirstIndex = group.FirstIndex };
+            var entry = new GroupColliders { Scene = group.Scene, World = world, Sources = sources, FirstIndex = group.FirstIndex };
             groups.Add(group.Id, entry);
             root.GetComponentsInChildren(true, triggers);
             root.GetComponentsInChildren(true, collisions);
@@ -190,7 +217,7 @@ namespace Fomoxa.Unity.Rapier
 
             Assign(indexed, group.FirstIndex, sources);
             Locate(sources, world, default, places2D, group.FirstIndex);
-            var entry = new GroupColliders { SceneId = group.SceneId, World2D = world, Sources2D = sources, FirstIndex = group.FirstIndex };
+            var entry = new GroupColliders { Scene = group.Scene, World2D = world, Sources2D = sources, FirstIndex = group.FirstIndex };
             groups.Add(group.Id, entry);
             root.GetComponentsInChildren(true, triggers2D);
             root.GetComponentsInChildren(true, collisions2D);
@@ -220,39 +247,59 @@ namespace Fomoxa.Unity.Rapier
             }
         }
 
-        public void UnloadScene(uint sceneId)
+        public void UnloadScene(Scene scene, NetworkScene instance)
         {
-            leavingGroups.Clear();
-            foreach (KeyValuePair<int, GroupColliders> group in groups)
+            if (instance != default)
             {
-                if (group.Value.SceneId == sceneId)
+                leavingGroups.Clear();
+                foreach (KeyValuePair<int, GroupColliders> group in groups)
                 {
-                    leavingGroups.Add(group.Key);
+                    if (group.Value.Scene == instance)
+                    {
+                        leavingGroups.Add(group.Key);
+                    }
                 }
+
+                foreach (int groupId in leavingGroups)
+                {
+                    RemoveGroup(groupId);
+                }
+
+                leavingGroups.Clear();
             }
 
-            foreach (int groupId in leavingGroups)
-            {
-                RemoveGroup(groupId);
-            }
-
-            leavingGroups.Clear();
-            if (!loaded.Remove(sceneId, out SceneColliders entry))
+            if (!loaded.Remove(scene, out SceneColliders entry))
             {
                 return;
             }
 
             Release(entry.Claimed);
-            if (entry.World != null && statics.Remove(entry.World, out List<Collider> sources))
+            if (entry.World != null)
             {
-                Forget(sources, entry.World, places);
-                trackers.Remove(entry.World);
+                Forget(entry.Sources, entry.World, places);
+                if (instance != default)
+                {
+                    statics.Remove(entry.World);
+                    trackers.Remove(entry.World);
+                }
+                else if (statics.TryGetValue(entry.World, out List<Collider> indexed))
+                {
+                    Clear(indexed, entry.FirstIndex, entry.Sources.Count);
+                }
             }
 
-            if (entry.World2D != null && statics2D.Remove(entry.World2D, out List<Collider2D> sources2D))
+            if (entry.World2D != null)
             {
-                Forget(sources2D, entry.World2D, places2D);
-                trackers2D.Remove(entry.World2D);
+                Forget(entry.Sources2D, entry.World2D, places2D);
+                if (instance != default)
+                {
+                    statics2D.Remove(entry.World2D);
+                    trackers2D.Remove(entry.World2D);
+                }
+                else if (statics2D.TryGetValue(entry.World2D, out List<Collider2D> indexed2D))
+                {
+                    Clear(indexed2D, entry.FirstIndex2D, entry.Sources2D.Count);
+                }
             }
         }
 
@@ -602,7 +649,7 @@ namespace Fomoxa.Unity.Rapier
 
         private sealed class GroupColliders
         {
-            public uint SceneId;
+            public NetworkScene Scene;
             public int FirstIndex;
             public RapierWorld World;
             public RapierWorld2D World2D;
@@ -615,6 +662,10 @@ namespace Fomoxa.Unity.Rapier
         {
             public RapierWorld World;
             public RapierWorld2D World2D;
+            public List<Collider> Sources;
+            public List<Collider2D> Sources2D;
+            public int FirstIndex;
+            public int FirstIndex2D;
             public readonly List<MonoBehaviour> Claimed = new List<MonoBehaviour>();
         }
     }

@@ -66,7 +66,7 @@ namespace Fomoxa.Networking.Rapier
                 throw new ArgumentException("Rapier refused a static 2D collider (degenerate polygon or polyline)", nameof(colliders));
             }
 
-            return new StaticGroup(0, (int)group, (int)first, colliders.Count);
+            return new StaticGroup(default, (int)group, (int)first, colliders.Count);
         }
 
         public void RemoveStatic(StaticGroup group) => RapierNative.fr2_world_remove_static(world, (uint)group.Id);

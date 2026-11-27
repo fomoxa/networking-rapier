@@ -45,7 +45,7 @@ namespace Fomoxa.Networking.Rapier.Bench
             using (var physics = new RapierScenes(new Vector3(0f, -9.81f, 0f)))
             {
                 float half = (MathF.Ceiling(MathF.Sqrt(ragdolls)) * Spacing) + Spacing;
-                physics.AddStatic(0, new[] { new ColliderDesc(BodyShape.Box(new Vector3(half, 0.5f, half)), new Vector3(0f, -0.5f, 0f), Quaternion.Identity, ColliderMaterial.Default, 0, false) });
+                physics.AddStatic(default, new[] { new ColliderDesc(BodyShape.Box(new Vector3(half, 0.5f, half)), new Vector3(0f, -0.5f, 0f), Quaternion.Identity, ColliderMaterial.Default, 0, false) });
                 Connect(physics);
                 Spawn(physics);
                 PhaseResult falling = Measure(fallingTicks);

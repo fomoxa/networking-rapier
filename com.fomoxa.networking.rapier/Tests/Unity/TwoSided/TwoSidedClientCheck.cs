@@ -67,7 +67,7 @@ namespace Fomoxa.Unity.Rapier.Tests
             manager = Manager(sceneFile);
             var physics = manager.GetComponent<RapierPhysics>();
             TwoSidedBall.Record = record;
-            TwoSidedBall.WorldHash = () => physics.Scenes.WorldOf(TwoSidedScenario.ClientSceneId).StateHash;
+            TwoSidedBall.WorldHash = () => physics.Scenes.WorldOf(default).StateHash;
             int instances = 0;
             manager.Prefabs.Register(TwoSidedScenario.BallPrefabId, TwoSidedScenario.BallFingerprint, (position, rotation) =>
             {

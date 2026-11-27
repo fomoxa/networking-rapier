@@ -4,6 +4,7 @@ using Fomoxa.Networking;
 using Fomoxa.Networking.Messaging;
 using Fomoxa.Networking.Objects;
 using Fomoxa.Networking.Rapier;
+using Fomoxa.Networking.Sessions;
 using Fomoxa.Networking.Simulation;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -17,10 +18,12 @@ namespace Fomoxa.Unity.Rapier
 
         private readonly Dictionary<NetworkObject, Bound> bound = new Dictionary<NetworkObject, Bound>();
         private readonly Dictionary<IPhysicsSimulation, SteppedWorld> stepped = new Dictionary<IPhysicsSimulation, SteppedWorld>();
-        private readonly HashSet<uint> loadedScenes = new HashSet<uint>();
-        private readonly HashSet<uint> refusedScenes = new HashSet<uint>();
-        private readonly HashSet<uint> presentScenes = new HashSet<uint>();
-        private readonly List<uint> leavingScenes = new List<uint>();
+        private readonly Dictionary<Scene, Placement> placed = new Dictionary<Scene, Placement>();
+        private readonly HashSet<Scene> refusedScenes = new HashSet<Scene>();
+        private readonly HashSet<Scene> presentScenes = new HashSet<Scene>();
+        private readonly List<Scene> leavingScenes = new List<Scene>();
+        private readonly HashSet<NetworkScene> clientLoading = new HashSet<NetworkScene>();
+        private readonly Dictionary<Scene, Additions> additions = new Dictionary<Scene, Additions>();
         private readonly List<NetworkObject> leaving = new List<NetworkObject>();
         private readonly HashSet<NetworkObject> spawned = new HashSet<NetworkObject>();
         private readonly List<NetworkObject> binding = new List<NetworkObject>();
@@ -58,6 +61,10 @@ namespace Fomoxa.Unity.Rapier
 
             scenes = new RapierScenes(gravity.ToNumerics());
             contacts = new RapierContacts(scenes);
+            ClientScenes clientScenes = manager.ClientManager.Scenes;
+            clientScenes.OnLoadStarted += RememberClientLoad;
+            clientScenes.OnLoaded += ForgetClientLoad;
+            clientScenes.OnUnloaded += ForgetClientLoad;
         }
 
         public override void Release()
@@ -72,12 +79,22 @@ namespace Fomoxa.Unity.Rapier
                 entry.Value.Restore(entry.Key);
             }
 
+            ClientScenes clientScenes = manager.ClientManager?.Scenes;
+            if (clientScenes != null)
+            {
+                clientScenes.OnLoadStarted -= RememberClientLoad;
+                clientScenes.OnLoaded -= ForgetClientLoad;
+                clientScenes.OnUnloaded -= ForgetClientLoad;
+            }
+
             contacts.Clear();
             contacts = null;
             bound.Clear();
             stepped.Clear();
-            loadedScenes.Clear();
+            placed.Clear();
             refusedScenes.Clear();
+            clientLoading.Clear();
+            additions.Clear();
             scenes.Dispose();
             scenes = null;
             manager = null;
@@ -85,35 +102,20 @@ namespace Fomoxa.Unity.Rapier
 
         public override void WorldsOf(Scene scene, List<IPhysicsSimulation> worlds)
         {
-            if (scenes == null)
+            if (scenes == null || !TryPlace(scene, out NetworkScene instance))
             {
                 return;
             }
 
-            uint sceneId = IdOf(scene);
-            inner.Clear();
-            foreach (uint id in scenes.SceneIds)
+            if (scenes.Has(instance))
             {
-                if (id == sceneId)
-                {
-                    inner.Add(scenes.WorldOf(id));
-                }
+                worlds.Add(Wrap(scenes.WorldOf(instance)));
             }
 
-            foreach (uint id in scenes.SceneIds2D)
+            if (scenes.Has2D(instance))
             {
-                if (id == sceneId)
-                {
-                    inner.Add(scenes.WorldOf2D(id));
-                }
+                worlds.Add(Wrap(scenes.WorldOf2D(instance)));
             }
-
-            foreach (IPhysicsSimulation world in inner)
-            {
-                worlds.Add(Wrap(world));
-            }
-
-            inner.Clear();
         }
 
         public override PhysicsBody BodyOf(NetworkObject networkObject)
@@ -268,9 +270,17 @@ namespace Fomoxa.Unity.Rapier
 
         public override IContactTracker TrackerOf(IPhysicsSimulation world) => contacts?.TrackerOf(world is SteppedWorld wrapper ? wrapper.Inner : world);
 
-        public override StaticGroup AddStatic(Scene scene, IReadOnlyList<ColliderDesc> colliders) => Begun().AddStatic(IdOf(scene), colliders);
+        public override StaticGroup AddStatic(Scene scene, IReadOnlyList<ColliderDesc> colliders)
+        {
+            NetworkScene target = Target(scene);
+            return Remember(scene, target, scenes.AddStatic(target, colliders));
+        }
 
-        public override StaticGroup AddStatic2D(Scene scene, IReadOnlyList<ColliderDesc2D> colliders) => Begun().AddStatic2D(IdOf(scene), colliders);
+        public override StaticGroup AddStatic2D(Scene scene, IReadOnlyList<ColliderDesc2D> colliders)
+        {
+            NetworkScene target = Target(scene);
+            return Remember(scene, target, scenes.AddStatic2D(target, colliders));
+        }
 
         public override StaticGroup AddStatic(GameObject root)
         {
@@ -279,7 +289,7 @@ namespace Fomoxa.Unity.Rapier
                 throw new ArgumentNullException(nameof(root));
             }
 
-            uint sceneId = IdOf(root.scene);
+            NetworkScene target = Target(root.scene);
             var sources = new List<Collider>();
             var colliders = new List<ColliderDesc>();
             BodyDescriptions.StaticColliders(root, sources);
@@ -291,9 +301,9 @@ namespace Fomoxa.Unity.Rapier
                 }
             }
 
-            StaticGroup group = Begun().AddStatic(sceneId, colliders);
-            contacts.AddGroup(group, scenes.WorldOf(sceneId), sources, root);
-            return group;
+            StaticGroup group = scenes.AddStatic(target, colliders);
+            contacts.AddGroup(group, scenes.WorldOf(target), sources, root);
+            return Remember(root.scene, target, group);
         }
 
         public override StaticGroup AddStatic2D(GameObject root)
@@ -303,7 +313,7 @@ namespace Fomoxa.Unity.Rapier
                 throw new ArgumentNullException(nameof(root));
             }
 
-            uint sceneId = IdOf(root.scene);
+            NetworkScene target = Target(root.scene);
             var sources = new List<Collider2D>();
             var colliders = new List<ColliderDesc2D>();
             BodyDescriptions.StaticColliders2D(root, sources);
@@ -315,10 +325,10 @@ namespace Fomoxa.Unity.Rapier
                 }
             }
 
-            StaticGroup group = Begun().AddStatic2D(sceneId, colliders);
-            contacts.AddGroup2D(group, scenes.WorldOf2D(sceneId), sources, root);
+            StaticGroup group = scenes.AddStatic2D(target, colliders);
+            contacts.AddGroup2D(group, scenes.WorldOf2D(target), sources, root);
             AddEffectors(sources, null, (indices, desc) => scenes.AddEffector(group, indices, desc));
-            return group;
+            return Remember(root.scene, target, group);
         }
 
         public override void RemoveStatic(StaticGroup group)
@@ -330,15 +340,63 @@ namespace Fomoxa.Unity.Rapier
 
             contacts.RemoveGroup(group.Id);
             scenes.RemoveStatic(group);
+            foreach (Additions added in additions.Values)
+            {
+                added.Groups.Remove(group);
+            }
         }
 
-        public override PhysicsBody AddBody(Scene scene, in BodyDesc body) => Begun().AddBody(IdOf(scene), body);
+        public override PhysicsBody AddBody(Scene scene, in BodyDesc body)
+        {
+            NetworkScene target = Target(scene);
+            PhysicsBody created = scenes.AddBody(target, body);
+            if (target == default)
+            {
+                AdditionsOf(scene).Bodies.Add(created);
+            }
 
-        public override PhysicsBody2D AddBody2D(Scene scene, in BodyDesc2D body) => Begun().AddBody2D(IdOf(scene), body);
+            return created;
+        }
 
-        public override void RemoveBody(PhysicsBody body) => scenes?.RemoveBody(body);
+        public override PhysicsBody2D AddBody2D(Scene scene, in BodyDesc2D body)
+        {
+            NetworkScene target = Target(scene);
+            PhysicsBody2D created = scenes.AddBody2D(target, body);
+            if (target == default)
+            {
+                AdditionsOf(scene).Bodies2D.Add(created);
+            }
 
-        public override void RemoveBody2D(PhysicsBody2D body) => scenes?.RemoveBody2D(body);
+            return created;
+        }
+
+        public override void RemoveBody(PhysicsBody body)
+        {
+            if (scenes == null)
+            {
+                return;
+            }
+
+            scenes.RemoveBody(body);
+            foreach (Additions added in additions.Values)
+            {
+                added.Bodies.Remove(body);
+            }
+        }
+
+        public override void RemoveBody2D(PhysicsBody2D body)
+        {
+            if (scenes == null)
+            {
+                return;
+            }
+
+            scenes.RemoveBody2D(body);
+            foreach (Additions added in additions.Values)
+            {
+                added.Bodies2D.Remove(body);
+            }
+        }
 
         internal void WriteBack(IPhysicsSimulation world)
         {
@@ -388,13 +446,23 @@ namespace Fomoxa.Unity.Rapier
             {
                 Scene scene = SceneManager.GetSceneAt(index);
                 uint sceneId = scene.isLoaded ? IdOf(scene) : 0;
-                if (sceneId == 0)
+                if (sceneId == 0 || !TryPlace(scene, sceneId, out NetworkScene instance))
                 {
                     continue;
                 }
 
-                presentScenes.Add(sceneId);
-                if (loadedScenes.Contains(sceneId) || refusedScenes.Contains(sceneId))
+                presentScenes.Add(scene);
+                if (placed.TryGetValue(scene, out Placement current))
+                {
+                    if (current.Instance == instance)
+                    {
+                        continue;
+                    }
+
+                    Leave(scene, current);
+                }
+
+                if (refusedScenes.Contains(scene))
                 {
                     continue;
                 }
@@ -402,7 +470,7 @@ namespace Fomoxa.Unity.Rapier
                 byte[] bytes = FileOf(sceneId);
                 if (bytes == null)
                 {
-                    refusedScenes.Add(sceneId);
+                    refusedScenes.Add(scene);
                     Debug.LogWarning($"[Fomoxa] scene 0x{sceneId:X8} has no scene file; Rapier simulates it without static geometry. Export the network scene files");
                     continue;
                 }
@@ -410,7 +478,7 @@ namespace Fomoxa.Unity.Rapier
                 try
                 {
                     SceneFile file = SceneFileFormat.Read(manager.Registry, bytes);
-                    scenes.LoadScene(new SceneFile
+                    scenes.LoadScene(instance, new SceneFile
                     {
                         SceneId = file.SceneId,
                         Colliders = file.Colliders,
@@ -419,54 +487,199 @@ namespace Fomoxa.Unity.Rapier
                         LayerCollisions2D = file.LayerCollisions2D,
                         Effectors2D = file.Effectors2D,
                     });
-                    loadedScenes.Add(sceneId);
-                    contacts.LoadScene(scene, sceneId, Has(scenes.SceneIds, sceneId) ? scenes.WorldOf(sceneId) : null, file.Colliders.Count, Has(scenes.SceneIds2D, sceneId) ? scenes.WorldOf2D(sceneId) : null, file.Colliders2D.Count);
+                    placed.Add(scene, new Placement(instance, file.SceneId));
+                    scenes.TryGetFileStatics(instance, file.SceneId, out StaticGroup statics, out StaticGroup statics2D);
+                    contacts.LoadScene(scene, statics.IsValid ? scenes.WorldOf(instance) : null, statics, statics2D.IsValid ? scenes.WorldOf2D(instance) : null, statics2D);
                 }
-                catch (Exception exception) when (exception is System.IO.InvalidDataException || exception is InvalidOperationException)
+                catch (Exception exception) when (exception is System.IO.InvalidDataException || exception is InvalidOperationException || exception is ArgumentException)
                 {
-                    refusedScenes.Add(sceneId);
+                    refusedScenes.Add(scene);
                     Debug.LogException(exception);
                 }
             }
 
             leavingScenes.Clear();
-            foreach (uint sceneId in loadedScenes)
+            foreach (KeyValuePair<Scene, Placement> entry in placed)
             {
-                if (!presentScenes.Contains(sceneId))
+                if (!presentScenes.Contains(entry.Key))
                 {
-                    leavingScenes.Add(sceneId);
+                    leavingScenes.Add(entry.Key);
                 }
             }
 
-            foreach (uint sceneId in leavingScenes)
+            foreach (Scene scene in leavingScenes)
             {
-                loadedScenes.Remove(sceneId);
-                contacts.UnloadScene(sceneId);
-                ForgetWorlds(sceneId);
-                scenes.UnloadScene(sceneId);
+                Leave(scene, placed[scene]);
             }
 
-            refusedScenes.IntersectWith(presentScenes);
+            leavingScenes.Clear();
+            foreach (Scene scene in additions.Keys)
+            {
+                if (!scene.isLoaded)
+                {
+                    leavingScenes.Add(scene);
+                }
+            }
+
+            foreach (Scene scene in leavingScenes)
+            {
+                DropAdditions(scene);
+            }
+
+            refusedScenes.RemoveWhere(scene => !scene.isLoaded);
             leavingScenes.Clear();
         }
 
-        private void ForgetWorlds(uint sceneId)
+        private void Leave(Scene scene, Placement placement)
         {
-            foreach (uint id in scenes.SceneIds)
+            placed.Remove(scene);
+            contacts.UnloadScene(scene, placement.Instance);
+            if (placement.Instance == default)
             {
-                if (id == sceneId)
+                scenes.UnloadSceneFile(placement.SceneId);
+                return;
+            }
+
+            ForgetWorlds(placement.Instance);
+            scenes.UnloadScene(placement.Instance);
+        }
+
+        private void DropAdditions(Scene scene)
+        {
+            if (!additions.Remove(scene, out Additions added))
+            {
+                return;
+            }
+
+            foreach (StaticGroup group in added.Groups)
+            {
+                contacts.RemoveGroup(group.Id);
+                scenes.RemoveStatic(group);
+            }
+
+            foreach (PhysicsBody body in added.Bodies)
+            {
+                scenes.RemoveBody(body);
+            }
+
+            foreach (PhysicsBody2D body in added.Bodies2D)
+            {
+                scenes.RemoveBody2D(body);
+            }
+        }
+
+        private void ForgetWorlds(NetworkScene instance)
+        {
+            if (scenes.Has(instance))
+            {
+                stepped.Remove(scenes.WorldOf(instance));
+            }
+
+            if (scenes.Has2D(instance))
+            {
+                stepped.Remove(scenes.WorldOf2D(instance));
+            }
+        }
+
+        private bool TryPlace(Scene scene, out NetworkScene instance) => TryPlace(scene, IdOf(scene), out instance);
+
+        private bool TryPlace(Scene scene, uint sceneId, out NetworkScene instance)
+        {
+            ServerManager server = manager.ServerManager;
+            if (server.State == ServerState.Started)
+            {
+                if (server.Scenes.TryGetNetworkScene(scene, out instance))
                 {
-                    stepped.Remove(scenes.WorldOf(id));
+                    return true;
+                }
+
+                instance = default;
+                return InDefaultWorld(scene) || !ServerLoads(server.Scenes, sceneId);
+            }
+
+            if (manager.ClientManager.Scenes.TryGetNetworkScene(scene, out instance))
+            {
+                return true;
+            }
+
+            instance = default;
+            return InDefaultWorld(scene) || !ClientLoads(sceneId);
+        }
+
+        private bool InDefaultWorld(Scene scene) =>
+            (placed.TryGetValue(scene, out Placement placement) && placement.Instance == default) || additions.ContainsKey(scene);
+
+        private bool ServerLoads(NetworkScenes serverScenes, uint sceneId)
+        {
+            if (sceneId == 0 || !manager.Scenes.Contains(sceneId))
+            {
+                return false;
+            }
+
+            foreach (NetworkScene instance in serverScenes.InstancesOf(sceneId))
+            {
+                if (!serverScenes.TryGetScene(instance, out Scene _))
+                {
+                    return true;
                 }
             }
 
-            foreach (uint id in scenes.SceneIds2D)
+            return false;
+        }
+
+        private bool ClientLoads(uint sceneId)
+        {
+            if (manager.ClientManager.State != ConnectionState.Started)
             {
-                if (id == sceneId)
+                clientLoading.Clear();
+                return false;
+            }
+
+            foreach (NetworkScene instance in clientLoading)
+            {
+                if (manager.ClientManager.Scenes.SceneIdOf(instance) == sceneId)
                 {
-                    stepped.Remove(scenes.WorldOf2D(id));
+                    return true;
                 }
             }
+
+            return false;
+        }
+
+        private void RememberClientLoad(NetworkScene instance, uint sceneId) => clientLoading.Add(instance);
+
+        private void ForgetClientLoad(NetworkScene instance) => clientLoading.Remove(instance);
+
+        private NetworkScene Target(Scene scene)
+        {
+            Begun();
+            if (!TryPlace(scene, out NetworkScene instance))
+            {
+                throw new InvalidOperationException($"scene {scene.name} is still loading as a network scene; add geometry and bodies to it once it has loaded");
+            }
+
+            return instance;
+        }
+
+        private StaticGroup Remember(Scene scene, NetworkScene target, StaticGroup group)
+        {
+            if (target == default && group.IsValid)
+            {
+                AdditionsOf(scene).Groups.Add(group);
+            }
+
+            return group;
+        }
+
+        private Additions AdditionsOf(Scene scene)
+        {
+            if (!additions.TryGetValue(scene, out Additions added))
+            {
+                added = new Additions();
+                additions.Add(scene, added);
+            }
+
+            return added;
         }
 
         private void SyncBodies()
@@ -549,25 +762,29 @@ namespace Fomoxa.Unity.Rapier
                 return found;
             }
 
+            if (!TryPlace(networkObject.gameObject.scene, out NetworkScene instance))
+            {
+                return null;
+            }
+
             found = new Bound();
             bound.Add(networkObject, found);
-            uint sceneId = IdOf(networkObject.gameObject.scene);
             GameObject root = networkObject.gameObject;
             try
             {
-                AddPart(networkObject, found, sceneId, root);
+                AddPart(networkObject, found, instance, root);
                 networkObject.GetComponentsInChildren(true, treeBodies);
                 foreach (Rigidbody rigidbody in treeBodies)
                 {
                     if (rigidbody.gameObject != root && ActiveInTree(rigidbody.transform, root.transform))
                     {
-                        AddPart(networkObject, found, sceneId, rigidbody.gameObject);
+                        AddPart(networkObject, found, instance, rigidbody.gameObject);
                     }
                 }
 
                 if (!root.TryGetComponent(out Rigidbody2D root2D) || root2D.simulated)
                 {
-                    AddPart2D(networkObject, found, sceneId, root);
+                    AddPart2D(networkObject, found, instance, root);
                 }
 
                 networkObject.GetComponentsInChildren(true, treeBodies2D);
@@ -575,7 +792,7 @@ namespace Fomoxa.Unity.Rapier
                 {
                     if (rigidbody.gameObject != root && rigidbody.simulated && ActiveInTree(rigidbody.transform, root.transform))
                     {
-                        AddPart2D(networkObject, found, sceneId, rigidbody.gameObject);
+                        AddPart2D(networkObject, found, instance, rigidbody.gameObject);
                     }
                 }
 
@@ -591,7 +808,7 @@ namespace Fomoxa.Unity.Rapier
             return found;
         }
 
-        private void AddPart(NetworkObject networkObject, Bound found, uint sceneId, GameObject source)
+        private void AddPart(NetworkObject networkObject, Bound found, NetworkScene instance, GameObject source)
         {
             var sources = new List<Collider>();
             if (!BodyDescriptions.TryDescribe(source, out BodyDesc body, sources))
@@ -599,8 +816,8 @@ namespace Fomoxa.Unity.Rapier
                 return;
             }
 
-            var part = new BoundPart { Transform = source.transform, IsRoot = source == networkObject.gameObject, Body = scenes.AddBody(networkObject, sceneId, body) };
-            found.World = scenes.WorldOf(sceneId);
+            var part = new BoundPart { Transform = source.transform, IsRoot = source == networkObject.gameObject, Body = scenes.AddBody(networkObject, instance, body) };
+            found.World = scenes.WorldOf(instance);
             if (source.TryGetComponent(out Rigidbody rigidbody))
             {
                 part.Rigidbody = rigidbody;
@@ -618,7 +835,7 @@ namespace Fomoxa.Unity.Rapier
             contacts.AddBody(networkObject, found.World, part.Body.Handle, sources);
         }
 
-        private void AddPart2D(NetworkObject networkObject, Bound found, uint sceneId, GameObject source)
+        private void AddPart2D(NetworkObject networkObject, Bound found, NetworkScene instance, GameObject source)
         {
             var sources = new List<Collider2D>();
             if (!BodyDescriptions.TryDescribe2D(source, out BodyDesc2D body, sources))
@@ -626,8 +843,8 @@ namespace Fomoxa.Unity.Rapier
                 return;
             }
 
-            var part = new BoundPart { Transform = source.transform, IsRoot = source == networkObject.gameObject, Body2D = scenes.AddBody2D(networkObject, sceneId, body) };
-            found.World2D = scenes.WorldOf2D(sceneId);
+            var part = new BoundPart { Transform = source.transform, IsRoot = source == networkObject.gameObject, Body2D = scenes.AddBody2D(networkObject, instance, body) };
+            found.World2D = scenes.WorldOf2D(instance);
             if (source.TryGetComponent(out Rigidbody2D rigidbody))
             {
                 part.Rigidbody2D = rigidbody;
@@ -823,19 +1040,6 @@ namespace Fomoxa.Unity.Rapier
             return scenes;
         }
 
-        private static bool Has(IEnumerable<uint> sceneIds, uint sceneId)
-        {
-            foreach (uint id in sceneIds)
-            {
-                if (id == sceneId)
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
         private uint IdOf(Scene scene)
         {
             if (SceneIdOf != null)
@@ -854,6 +1058,26 @@ namespace Fomoxa.Unity.Rapier
             }
 
             return manager.Scenes.TryGetSceneFile(sceneId, out byte[] bytes) ? bytes : null;
+        }
+
+        private readonly struct Placement
+        {
+            public Placement(NetworkScene instance, uint sceneId)
+            {
+                Instance = instance;
+                SceneId = sceneId;
+            }
+
+            public NetworkScene Instance { get; }
+
+            public uint SceneId { get; }
+        }
+
+        private sealed class Additions
+        {
+            public readonly List<StaticGroup> Groups = new List<StaticGroup>();
+            public readonly List<PhysicsBody> Bodies = new List<PhysicsBody>();
+            public readonly List<PhysicsBody2D> Bodies2D = new List<PhysicsBody2D>();
         }
 
         private sealed class Bound

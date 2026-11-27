@@ -12,6 +12,7 @@ using Fomoxa.Networking.Simulation;
 using Fomoxa.Unity.Tests.Support;
 using NUnit.Framework;
 using UnityEditor;
+using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.TestTools;
@@ -27,6 +28,10 @@ namespace Fomoxa.Unity.Rapier.Tests
         private const uint RagdollPrefabId = 0xBA13;
         private const uint ChainPrefabId = 0xBA14;
         private const uint ArenaSceneId = 0x77;
+        private const uint RoomSceneId = 0x78;
+        private const uint SideSceneId = 0x79;
+        private const string RoomPath = "Assets/FomoxaRapierRoom{0}.unity";
+        private const string SidePath = "Assets/FomoxaRapierSide.unity";
 
         private readonly List<GameObject> created = new List<GameObject>();
         private readonly List<NetworkManager> managers = new List<NetworkManager>();
@@ -71,6 +76,19 @@ namespace Fomoxa.Unity.Rapier.Tests
 
             managers.Clear();
             created.Clear();
+            foreach (string path in new[] { string.Format(RoomPath, 0), string.Format(RoomPath, 1), SidePath })
+            {
+                Scene scene = SceneManager.GetSceneByPath(path);
+                if (scene.IsValid())
+                {
+                    EditorSceneManager.CloseScene(scene, true);
+                }
+
+                if (System.IO.File.Exists(path))
+                {
+                    AssetDatabase.DeleteAsset(path);
+                }
+            }
         }
 
         [Test]
@@ -276,6 +294,106 @@ namespace Fomoxa.Unity.Rapier.Tests
         }
 
         [Test]
+        public void EachInstanceOfOneSceneGetsItsOwnRapierWorldAndLeavesItAlone()
+        {
+            NetworkObject ballPrefab = Prefab("Ball", BallPrefabId, ball => ball.AddComponent<SphereCollider>().radius = 0.5f);
+            ballPrefab.gameObject.AddComponent<Rigidbody>();
+            NetworkManager server = Manager(ballPrefab);
+            var physics = server.GetComponent<RapierPhysics>();
+            var loader = new RoomLoader();
+            server.Scenes.Register(RoomSceneId, loader);
+            physics.SceneIdOf = scene => loader.Rooms.Contains(scene) ? RoomSceneId : 0;
+            physics.SceneFileOf = sceneId => sceneId == RoomSceneId ? loader.File : null;
+            server.ServerManager.StartConnection(1);
+
+            NetworkScene red = server.ServerManager.Scenes.Load(RoomSceneId, Array.Empty<ulong>(), ScenePhysics.Own);
+            NetworkScene blue = server.ServerManager.Scenes.Load(RoomSceneId, Array.Empty<ulong>(), ScenePhysics.Own);
+            RunFrames(1);
+            NetworkObject redBall = SpawnIn(server, ballPrefab, loader.Rooms[0], new Vector3(0f, 4f, 0f));
+            NetworkObject blueBall = SpawnIn(server, ballPrefab, loader.Rooms[1], new Vector3(0f, 4f, 0f));
+            RunFrames(180);
+
+            CollectionAssert.AreEquivalent(new[] { red, blue }, physics.Scenes.Scenes);
+            Assert.AreNotSame(physics.Scenes.WorldOf(red), physics.Scenes.WorldOf(blue));
+            Assert.AreEqual(0f, redBall.transform.position.x, 1e-3f);
+            Assert.AreEqual(0.5f, redBall.transform.position.y, 0.05f);
+            Assert.AreEqual(0f, blueBall.transform.position.x, 1e-3f);
+            Assert.AreEqual(0.5f, blueBall.transform.position.y, 0.05f);
+
+            server.ServerManager.Scenes.Unload(red);
+            RunFrames(60);
+
+            CollectionAssert.AreEqual(new[] { blue }, physics.Scenes.Scenes);
+            Assert.AreEqual(0.5f, blueBall.transform.position.y, 0.05f);
+        }
+
+        [Test]
+        public void AnOpenSceneStaysInTheDefaultWorldWhileAnInstanceOfItsSceneLoads()
+        {
+            NetworkObject ballPrefab = Prefab("Ball", BallPrefabId, ball => ball.AddComponent<SphereCollider>().radius = 0.5f);
+            ballPrefab.gameObject.AddComponent<Rigidbody>();
+            NetworkManager server = Manager(ballPrefab);
+            var physics = server.GetComponent<RapierPhysics>();
+            Scene active = SceneManager.GetActiveScene();
+            Static("Ground", new Vector3(0f, -0.5f, 0f), new Vector3(20f, 1f, 20f), false);
+            byte[] file = ExportedFile(active, RoomSceneId);
+            var loader = new RoomLoader { Deferred = true };
+            server.Scenes.Register(RoomSceneId, loader);
+            physics.SceneIdOf = scene => scene == active || loader.Rooms.Contains(scene) ? RoomSceneId : 0;
+            physics.SceneFileOf = sceneId => sceneId == RoomSceneId ? file : null;
+            var box = new[] { new ColliderDesc(NetworkShapes.Box(Vector3.one), System.Numerics.Vector3.Zero, System.Numerics.Quaternion.Identity, ColliderMaterial.Default, 0, false) };
+            server.ServerManager.StartConnection(1);
+            NetworkObject ball = Spawn(server, ballPrefab, new Vector3(0f, 2f, 0f));
+            RunFrames(60);
+
+            NetworkScene room = server.ServerManager.Scenes.Load(RoomSceneId, Array.Empty<ulong>(), ScenePhysics.Own);
+            RunFrames(60);
+
+            Assert.AreEqual(0.5f, ball.transform.position.y, 0.05f);
+            CollectionAssert.AreEqual(new[] { default(NetworkScene) }, physics.Scenes.Scenes);
+            Assert.Throws<InvalidOperationException>(() => physics.AddStatic(loader.Rooms[0], box));
+            Assert.AreEqual(default(NetworkScene), physics.AddStatic(active, box).Scene);
+
+            loader.Finish();
+            RunFrames(1);
+
+            CollectionAssert.AreEquivalent(new[] { default(NetworkScene), room }, physics.Scenes.Scenes);
+            Assert.AreEqual(0.5f, ball.transform.position.y, 0.05f);
+        }
+
+        [Test]
+        public void ScenesOutsideNetworkScenesShareTheDefaultWorldAndTakeOnlyTheirOwnGeometryAway()
+        {
+            NetworkObject ballPrefab = Prefab("Ball", BallPrefabId, ball => ball.AddComponent<SphereCollider>().radius = 0.5f);
+            ballPrefab.gameObject.AddComponent<Rigidbody>();
+            NetworkManager server = Manager(ballPrefab);
+            var physics = server.GetComponent<RapierPhysics>();
+            Scene active = SceneManager.GetActiveScene();
+            Static("Left", new Vector3(-5f, -0.5f, 0f), new Vector3(4f, 1f, 4f), false);
+            Scene side = OpenScratchScene(SidePath);
+            SceneManager.MoveGameObjectToScene(Static("Right", new Vector3(5f, -0.5f, 0f), new Vector3(4f, 1f, 4f), false), side);
+            byte[] activeFile = ExportedFile(active, ArenaSceneId);
+            byte[] sideFile = ExportedFile(side, SideSceneId);
+            physics.SceneIdOf = scene => scene == active ? ArenaSceneId : scene == side ? SideSceneId : 0;
+            physics.SceneFileOf = sceneId => sceneId == ArenaSceneId ? activeFile : sceneId == SideSceneId ? sideFile : null;
+            server.ServerManager.StartConnection(1);
+            NetworkObject leftBall = Spawn(server, ballPrefab, new Vector3(-5f, 2f, 0f));
+            NetworkObject rightBall = Spawn(server, ballPrefab, new Vector3(5f, 2f, 0f));
+
+            RunFrames(120);
+
+            CollectionAssert.AreEqual(new[] { default(NetworkScene) }, physics.Scenes.Scenes);
+            Assert.AreEqual(0.5f, leftBall.transform.position.y, 0.05f);
+            Assert.AreEqual(0.5f, rightBall.transform.position.y, 0.05f);
+
+            EditorSceneManager.CloseScene(side, true);
+            RunFrames(120);
+
+            Assert.AreEqual(0.5f, leftBall.transform.position.y, 0.05f);
+            Assert.Less(rightBall.transform.position.y, -1f);
+        }
+
+        [Test]
         public void TheStaticGeometryOfANetworkSceneComesFromItsSceneFile()
         {
             Static("Ground", new Vector3(0f, -0.5f, 0f), new Vector3(20f, 1f, 20f), false);
@@ -289,7 +407,7 @@ namespace Fomoxa.Unity.Rapier.Tests
 
             RunFrames(180);
 
-            CollectionAssert.AreEqual(new[] { ArenaSceneId }, physics.Scenes.SceneIds);
+            CollectionAssert.AreEqual(new[] { default(NetworkScene) }, physics.Scenes.Scenes);
             Assert.AreEqual(0.5f, ball.transform.position.y, 0.05f);
         }
 
@@ -698,7 +816,7 @@ namespace Fomoxa.Unity.Rapier.Tests
             NetworkObject ball = Spawn(server, ballPrefab, new Vector3(0f, 4f, 0f));
             RunFrames(180);
 
-            Assert.AreEqual((ArenaSceneId, 0, 2), (group.SceneId, group.FirstIndex, group.Count));
+            Assert.AreEqual((default(NetworkScene), 0, 2), (group.Scene, group.FirstIndex, group.Count));
             Assert.AreEqual(0.25f, ball.transform.position.y, 0.05f);
             Assert.IsTrue(trigger.IsAttached);
             CollectionAssert.AreEqual(new[] { "enter Ball2D(Clone)", "exit Ball2D(Clone)" }, events);
@@ -954,26 +1072,7 @@ namespace Fomoxa.Unity.Rapier.Tests
         private static void UseActiveScene(NetworkManager manager)
         {
             Scene active = SceneManager.GetActiveScene();
-            var sources = new List<Collider>();
-            var colliders = new List<ColliderDesc>();
-            BodyDescriptions.StaticColliders(active, sources);
-            foreach (Collider source in sources)
-            {
-                BodyDescriptions.DescribeStatic(source, null, colliders);
-            }
-
-            var file = new SceneFile { SceneId = ArenaSceneId };
-            foreach (ColliderDesc collider in colliders)
-            {
-                file.Colliders.Add(SceneFileGeometry.ToFile(collider));
-            }
-
-            for (int layer = 0; layer < 32; layer++)
-            {
-                file.LayerCollisions.Add(uint.MaxValue);
-            }
-
-            byte[] bytes = SceneFileFormat.Write(TestObjects.Registry(), file);
+            byte[] bytes = ExportedFile(active, ArenaSceneId);
             var physics = manager.GetComponent<RapierPhysics>();
             physics.SceneIdOf = scene => scene == active ? ArenaSceneId : 0;
             physics.SceneFileOf = sceneId => sceneId == ArenaSceneId ? bytes : null;
@@ -1138,6 +1237,45 @@ namespace Fomoxa.Unity.Rapier.Tests
             return instance;
         }
 
+        private static byte[] ExportedFile(Scene scene, uint sceneId)
+        {
+            var sources = new List<Collider>();
+            var colliders = new List<ColliderDesc>();
+            BodyDescriptions.StaticColliders(scene, sources);
+            foreach (Collider source in sources)
+            {
+                BodyDescriptions.DescribeStatic(source, null, colliders);
+            }
+
+            var file = new SceneFile { SceneId = sceneId };
+            foreach (ColliderDesc collider in colliders)
+            {
+                file.Colliders.Add(SceneFileGeometry.ToFile(collider));
+            }
+
+            for (int layer = 0; layer < 32; layer++)
+            {
+                file.LayerCollisions.Add(uint.MaxValue);
+            }
+
+            return SceneFileFormat.Write(TestObjects.Registry(), file);
+        }
+
+        private static Scene OpenScratchScene(string path)
+        {
+            System.IO.File.WriteAllText(path, "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n");
+            AssetDatabase.ImportAsset(path);
+            return EditorSceneManager.OpenScene(path, OpenSceneMode.Additive);
+        }
+
+        private NetworkObject SpawnIn(NetworkManager server, NetworkObject prefab, Scene scene, Vector3 position)
+        {
+            NetworkObject instance = UnityEngine.Object.Instantiate(prefab, position, Quaternion.identity);
+            SceneManager.MoveGameObjectToScene(instance.gameObject, scene);
+            server.ServerManager.Spawn(instance);
+            return instance;
+        }
+
         private void RunFrames(int count)
         {
             for (int frame = 0; frame < count; frame++)
@@ -1152,6 +1290,40 @@ namespace Fomoxa.Unity.Rapier.Tests
                 {
                     manager.RunFrameEnd();
                 }
+            }
+        }
+
+        private sealed class RoomLoader : ISceneLoader
+        {
+            public readonly List<Scene> Rooms = new List<Scene>();
+            public byte[] File;
+            public bool Deferred;
+            private Action finish;
+
+            public void Finish() => finish();
+
+            public void Load(SceneLoadRequest request, Action<float> progress, Action<Scene> loaded, Action<Exception> failed)
+            {
+                Scene room = OpenScratchScene(string.Format(RoomPath, Rooms.Count));
+                var ground = new GameObject("Ground");
+                ground.transform.position = new Vector3(0f, -0.5f, 0f);
+                ground.AddComponent<BoxCollider>().size = new Vector3(20f, 1f, 20f);
+                SceneManager.MoveGameObjectToScene(ground, room);
+                File ??= ExportedFile(room, RoomSceneId);
+                Rooms.Add(room);
+                if (Deferred)
+                {
+                    finish = () => loaded(room);
+                    return;
+                }
+
+                loaded(room);
+            }
+
+            public void Unload(Scene scene, Action unloaded)
+            {
+                EditorSceneManager.CloseScene(scene, true);
+                unloaded();
             }
         }
     }

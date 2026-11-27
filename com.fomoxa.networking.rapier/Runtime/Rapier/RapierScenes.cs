@@ -27,8 +27,10 @@ namespace Fomoxa.Networking.Rapier
         private readonly List<UnownedBody2D> unowned2D = new List<UnownedBody2D>();
         private readonly List<BodyHandle> movedBodies = new List<BodyHandle>();
         private readonly List<INetworkEntity> released = new List<INetworkEntity>();
-        private readonly Dictionary<(uint SceneId, ulong SceneObjectId), List<List<FileEffector>>> objectEffectors = new Dictionary<(uint SceneId, ulong SceneObjectId), List<List<FileEffector>>>();
-        private readonly List<(uint SceneId, ulong SceneObjectId)> leavingObjects = new List<(uint SceneId, ulong SceneObjectId)>();
+        private readonly Dictionary<(uint Scene, ulong SceneObjectId), List<List<FileEffector>>> objectEffectors = new Dictionary<(uint Scene, ulong SceneObjectId), List<List<FileEffector>>>();
+        private readonly List<(uint Scene, ulong SceneObjectId)> leavingObjects = new List<(uint Scene, ulong SceneObjectId)>();
+        private readonly Dictionary<(uint Scene, uint SceneId), FileEntry> files = new Dictionary<(uint Scene, uint SceneId), FileEntry>();
+        private readonly List<(uint Scene, uint SceneId)> leavingFiles = new List<(uint Scene, uint SceneId)>();
         private int nextStatic = 1;
 
         public RapierScenes()
@@ -44,47 +46,88 @@ namespace Fomoxa.Networking.Rapier
 
         public PhysicsBackend Backend => PhysicsBackend.Rapier;
 
-        public IEnumerable<uint> SceneIds => worlds.Keys;
-
-        public IEnumerable<uint> SceneIds2D => worlds2D.Keys;
-
-        public RapierWorld WorldOf(uint sceneId)
+        public IEnumerable<NetworkScene> Scenes
         {
-            if (!worlds.TryGetValue(sceneId, out RapierWorld world))
+            get
+            {
+                foreach (uint scene in worlds.Keys)
+                {
+                    yield return new NetworkScene(scene);
+                }
+            }
+        }
+
+        public IEnumerable<NetworkScene> Scenes2D
+        {
+            get
+            {
+                foreach (uint scene in worlds2D.Keys)
+                {
+                    yield return new NetworkScene(scene);
+                }
+            }
+        }
+
+        public bool Has(NetworkScene scene) => worlds.ContainsKey(scene.Id);
+
+        public bool Has2D(NetworkScene scene) => worlds2D.ContainsKey(scene.Id);
+
+        public RapierWorld WorldOf(NetworkScene scene)
+        {
+            if (!worlds.TryGetValue(scene.Id, out RapierWorld world))
             {
                 world = new RapierWorld(gravity);
-                if (layers.TryGetValue(sceneId, out List<uint> masks))
+                if (layers.TryGetValue(scene.Id, out List<uint> masks))
                 {
                     world.SetLayerCollisions(masks);
                 }
 
-                worlds.Add(sceneId, world);
+                worlds.Add(scene.Id, world);
             }
 
             return world;
         }
 
-        public RapierWorld2D WorldOf2D(uint sceneId)
+        public RapierWorld2D WorldOf2D(NetworkScene scene)
         {
-            if (!worlds2D.TryGetValue(sceneId, out RapierWorld2D world))
+            if (!worlds2D.TryGetValue(scene.Id, out RapierWorld2D world))
             {
                 world = new RapierWorld2D(new Vector2(gravity.X, gravity.Y));
-                if (layers2D.TryGetValue(sceneId, out List<uint> masks))
+                if (layers2D.TryGetValue(scene.Id, out List<uint> masks))
                 {
                     world.SetLayerCollisions(masks);
                 }
 
-                worlds2D.Add(sceneId, world);
+                worlds2D.Add(scene.Id, world);
             }
 
             return world;
         }
 
-        public void LoadScene(SceneFile file)
+        public bool TryGetFileStatics(NetworkScene scene, uint sceneId, out StaticGroup statics, out StaticGroup statics2D)
+        {
+            if (files.TryGetValue((scene.Id, sceneId), out FileEntry entry))
+            {
+                statics = entry.Statics;
+                statics2D = entry.Statics2D;
+                return true;
+            }
+
+            statics = default;
+            statics2D = default;
+            return false;
+        }
+
+        public void LoadScene(NetworkScene scene, SceneFile file)
         {
             if (file == null)
             {
                 throw new ArgumentNullException(nameof(file));
+            }
+
+            if (files.ContainsKey((scene.Id, file.SceneId)))
+            {
+                throw new ArgumentException($"the scene file of scene 0x{file.SceneId:X8} is already loaded into the world of network scene {scene.Id}", nameof(file));
             }
 
             var colliders = new List<ColliderDesc>(file.Colliders.Count);
@@ -112,23 +155,25 @@ namespace Fomoxa.Networking.Rapier
                     }
                 }
 
-                Remember(layers, file.SceneId, file.LayerCollisions);
-                Remember(layers2D, file.SceneId, file.LayerCollisions2D);
+                Remember(layers, scene.Id, file.LayerCollisions);
+                Remember(layers2D, scene.Id, file.LayerCollisions2D);
+                StaticGroup statics = default;
+                StaticGroup statics2D = default;
                 if (colliders.Count > 0)
                 {
-                    RapierWorld world = WorldOf(file.SceneId);
-                    if (layers.TryGetValue(file.SceneId, out List<uint> masks))
+                    RapierWorld world = WorldOf(scene);
+                    if (layers.TryGetValue(scene.Id, out List<uint> masks))
                     {
                         world.SetLayerCollisions(masks);
                     }
 
-                    world.AddStatic(colliders);
+                    statics = Remember(new StaticEntry(scene, world, null, world.AddStatic(colliders)));
                 }
 
                 if (colliders2D.Count > 0)
                 {
-                    RapierWorld2D world = WorldOf2D(file.SceneId);
-                    if (layers2D.TryGetValue(file.SceneId, out List<uint> masks))
+                    RapierWorld2D world = WorldOf2D(scene);
+                    if (layers2D.TryGetValue(scene.Id, out List<uint> masks))
                     {
                         world.SetLayerCollisions(masks);
                     }
@@ -138,12 +183,16 @@ namespace Fomoxa.Networking.Rapier
                     {
                         world.AddEffector(group, effector.Colliders, effector.Desc);
                     }
+
+                    statics2D = Remember(new StaticEntry(scene, null, world, group));
                 }
 
                 foreach (KeyValuePair<ulong, List<List<FileEffector>>> entry in sceneObjectEffectors)
                 {
-                    objectEffectors[(file.SceneId, entry.Key)] = entry.Value;
+                    objectEffectors[(scene.Id, entry.Key)] = entry.Value;
                 }
+
+                files.Add((scene.Id, file.SceneId), new FileEntry(statics, statics2D, new List<ulong>(sceneObjectEffectors.Keys)));
             }
             catch (ArgumentException exception)
             {
@@ -204,26 +253,57 @@ namespace Fomoxa.Networking.Rapier
             return found;
         }
 
-        public void UnloadScene(uint sceneId)
+        public void UnloadSceneFile(uint sceneId)
         {
-            layers.Remove(sceneId);
-            layers2D.Remove(sceneId);
-            leavingObjects.Clear();
-            foreach ((uint SceneId, ulong SceneObjectId) key in objectEffectors.Keys)
+            if (!files.Remove((0, sceneId), out FileEntry entry))
             {
-                if (key.SceneId == sceneId)
+                return;
+            }
+
+            RemoveStatic(entry.Statics);
+            RemoveStatic(entry.Statics2D);
+            foreach (ulong sceneObjectId in entry.SceneObjects)
+            {
+                objectEffectors.Remove((0, sceneObjectId));
+            }
+        }
+
+        public void UnloadScene(NetworkScene scene)
+        {
+            uint key = scene.Id;
+            layers.Remove(key);
+            layers2D.Remove(key);
+            leavingObjects.Clear();
+            foreach ((uint Scene, ulong SceneObjectId) entry in objectEffectors.Keys)
+            {
+                if (entry.Scene == key)
                 {
-                    leavingObjects.Add(key);
+                    leavingObjects.Add(entry);
                 }
             }
 
-            foreach ((uint SceneId, ulong SceneObjectId) key in leavingObjects)
+            foreach ((uint Scene, ulong SceneObjectId) entry in leavingObjects)
             {
-                objectEffectors.Remove(key);
+                objectEffectors.Remove(entry);
             }
 
             leavingObjects.Clear();
-            if (worlds.Remove(sceneId, out RapierWorld world))
+            leavingFiles.Clear();
+            foreach ((uint Scene, uint SceneId) entry in files.Keys)
+            {
+                if (entry.Scene == key)
+                {
+                    leavingFiles.Add(entry);
+                }
+            }
+
+            foreach ((uint Scene, uint SceneId) entry in leavingFiles)
+            {
+                files.Remove(entry);
+            }
+
+            leavingFiles.Clear();
+            if (worlds.Remove(key, out RapierWorld world))
             {
                 histories.Remove(world);
                 ForgetOwners(world);
@@ -231,7 +311,7 @@ namespace Fomoxa.Networking.Rapier
                 world.Dispose();
             }
 
-            if (worlds2D.Remove(sceneId, out RapierWorld2D world2D))
+            if (worlds2D.Remove(key, out RapierWorld2D world2D))
             {
                 histories.Remove(world2D);
                 ForgetOwners(world2D);
@@ -239,19 +319,19 @@ namespace Fomoxa.Networking.Rapier
                 world2D.Dispose();
             }
 
-            ForgetStatics(sceneId);
+            ForgetStatics(scene);
         }
 
-        public StaticGroup AddStatic(uint sceneId, IReadOnlyList<ColliderDesc> colliders)
+        public StaticGroup AddStatic(NetworkScene scene, IReadOnlyList<ColliderDesc> colliders)
         {
-            RapierWorld world = WorldOf(sceneId);
-            return Remember(new StaticEntry(sceneId, world, null, world.AddStatic(colliders)));
+            RapierWorld world = WorldOf(scene);
+            return Remember(new StaticEntry(scene, world, null, world.AddStatic(colliders)));
         }
 
-        public StaticGroup AddStatic2D(uint sceneId, IReadOnlyList<ColliderDesc2D> colliders)
+        public StaticGroup AddStatic2D(NetworkScene scene, IReadOnlyList<ColliderDesc2D> colliders)
         {
-            RapierWorld2D world = WorldOf2D(sceneId);
-            return Remember(new StaticEntry(sceneId, null, world, world.AddStatic(colliders)));
+            RapierWorld2D world = WorldOf2D(scene);
+            return Remember(new StaticEntry(scene, null, world, world.AddStatic(colliders)));
         }
 
         public void RemoveStatic(StaticGroup group)
@@ -265,18 +345,18 @@ namespace Fomoxa.Networking.Rapier
             entry.World2D?.RemoveStatic(entry.Inner);
         }
 
-        public PhysicsBody AddBody(uint sceneId, in BodyDesc body)
+        public PhysicsBody AddBody(NetworkScene scene, in BodyDesc body)
         {
-            RapierWorld world = WorldOf(sceneId);
+            RapierWorld world = WorldOf(scene);
             BodyHandle handle = world.CreateBody(body);
             var created = new PhysicsBody(world, handle);
             unowned.Add(new UnownedBody(world, handle, created));
             return created;
         }
 
-        public PhysicsBody2D AddBody2D(uint sceneId, in BodyDesc2D body)
+        public PhysicsBody2D AddBody2D(NetworkScene scene, in BodyDesc2D body)
         {
-            RapierWorld2D world = WorldOf2D(sceneId);
+            RapierWorld2D world = WorldOf2D(scene);
             BodyHandle handle = world.CreateBody(body);
             var created = new PhysicsBody2D(world, handle);
             unowned2D.Add(new UnownedBody2D(world, handle, created));
@@ -324,21 +404,21 @@ namespace Fomoxa.Networking.Rapier
         public INetworkEntity EntityOf(IPhysicsSimulation world, BodyHandle body) =>
             world != null && owners.TryGetValue((world, body), out INetworkEntity entity) ? entity : null;
 
-        public PhysicsBody AddBody(INetworkEntity entity, uint sceneId, in BodyDesc body)
+        public PhysicsBody AddBody(INetworkEntity entity, NetworkScene scene, in BodyDesc body)
         {
-            RapierWorld world = WorldOf(sceneId);
+            RapierWorld world = WorldOf(scene);
             BodyHandle handle = world.CreateBody(body);
             Track(entity, world, handle);
             return new PhysicsBody(world, handle);
         }
 
-        public PhysicsBody2D AddBody2D(INetworkEntity entity, uint sceneId, in BodyDesc2D body)
+        public PhysicsBody2D AddBody2D(INetworkEntity entity, NetworkScene scene, in BodyDesc2D body)
         {
-            RapierWorld2D world = WorldOf2D(sceneId);
+            RapierWorld2D world = WorldOf2D(scene);
             BodyHandle handle = world.CreateBody(body);
             int order = Count2D(entity);
             Track(entity, world, handle);
-            if (entity.SceneObjectId != 0 && objectEffectors.TryGetValue((sceneId, entity.SceneObjectId), out List<List<FileEffector>> perBody) && order < perBody.Count)
+            if (entity.SceneObjectId != 0 && objectEffectors.TryGetValue((scene.Id, entity.SceneObjectId), out List<List<FileEffector>> perBody) && order < perBody.Count)
             {
                 foreach (FileEffector effector in perBody[order])
                 {
@@ -533,6 +613,7 @@ namespace Fomoxa.Networking.Rapier
             histories.Clear();
             statics.Clear();
             objectEffectors.Clear();
+            files.Clear();
             unowned.Clear();
             unowned2D.Clear();
             released.Clear();
@@ -576,11 +657,11 @@ namespace Fomoxa.Networking.Rapier
             }
         }
 
-        private static void Remember(Dictionary<uint, List<uint>> remembered, uint sceneId, List<uint> masks)
+        private static void Remember(Dictionary<uint, List<uint>> remembered, uint scene, List<uint> masks)
         {
             if (masks.Count == 0)
             {
-                remembered.Remove(sceneId);
+                remembered.Remove(scene);
                 return;
             }
 
@@ -589,7 +670,7 @@ namespace Fomoxa.Networking.Rapier
                 throw new ArgumentException($"a layer collision matrix has 32 masks, not {masks.Count}");
             }
 
-            remembered[sceneId] = new List<uint>(masks);
+            remembered[scene] = new List<uint>(masks);
         }
 
         private void Track(INetworkEntity entity, IRapierBodies world, BodyHandle handle)
@@ -614,15 +695,15 @@ namespace Fomoxa.Networking.Rapier
         {
             int id = nextStatic++;
             statics.Add(id, entry);
-            return new StaticGroup(entry.SceneId, id, entry.Inner.FirstIndex, entry.Inner.Count);
+            return new StaticGroup(entry.Scene, id, entry.Inner.FirstIndex, entry.Inner.Count);
         }
 
-        private void ForgetStatics(uint sceneId)
+        private void ForgetStatics(NetworkScene scene)
         {
             leavingStatics.Clear();
             foreach (KeyValuePair<int, StaticEntry> entry in statics)
             {
-                if (entry.Value.SceneId == sceneId)
+                if (entry.Value.Scene == scene)
                 {
                     leavingStatics.Add(entry.Key);
                 }
@@ -703,21 +784,37 @@ namespace Fomoxa.Networking.Rapier
 
         private readonly struct StaticEntry
         {
-            public StaticEntry(uint sceneId, RapierWorld world, RapierWorld2D world2D, StaticGroup inner)
+            public StaticEntry(NetworkScene scene, RapierWorld world, RapierWorld2D world2D, StaticGroup inner)
             {
-                SceneId = sceneId;
+                Scene = scene;
                 World = world;
                 World2D = world2D;
                 Inner = inner;
             }
 
-            public uint SceneId { get; }
+            public NetworkScene Scene { get; }
 
             public RapierWorld World { get; }
 
             public RapierWorld2D World2D { get; }
 
             public StaticGroup Inner { get; }
+        }
+
+        private readonly struct FileEntry
+        {
+            public FileEntry(StaticGroup statics, StaticGroup statics2D, List<ulong> sceneObjects)
+            {
+                Statics = statics;
+                Statics2D = statics2D;
+                SceneObjects = sceneObjects;
+            }
+
+            public StaticGroup Statics { get; }
+
+            public StaticGroup Statics2D { get; }
+
+            public List<ulong> SceneObjects { get; }
         }
 
         private readonly struct UnownedBody
