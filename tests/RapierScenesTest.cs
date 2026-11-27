@@ -437,9 +437,9 @@ namespace Fomoxa.Networking.Rapier.Tests
                 server.ServerManager.StartConnection(7777);
                 client.ClientManager.StartConnection("127.0.0.1", 7777);
                 Frames(10);
-                server.ServerManager.Scenes.LoadGlobal(new[] { ArenaSceneId });
+                NetworkScene arena = server.ServerManager.Scenes.LoadGlobal(new[] { ArenaSceneId })[0];
                 Frames(10);
-                var ball = new BallEntity { SceneId = ArenaSceneId, Position = new Vector3(0f, 5f, 0f) };
+                var ball = new BallEntity { Scene = arena, Position = new Vector3(0f, 5f, 0f) };
                 server.ServerManager.Spawn(ball);
                 Frames(180);
 
