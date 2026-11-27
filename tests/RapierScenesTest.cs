@@ -507,6 +507,72 @@ namespace Fomoxa.Networking.Rapier.Tests
         }
 
         [Test]
+        public void AConsoleBallMovedToAnotherInstanceKeepsItsMotionInTheOtherWorldAndLosesItsCodeJoints()
+        {
+            var files = new SceneFiles();
+            files.Add(Arena(ArenaSceneId));
+            var prefabs = new StandalonePrefabs();
+            prefabs.Register(BallPrefabId, 0xBA11, () => new BallEntity());
+            var logged = new List<Exception>();
+            var log = new NetworkLog(logged.Add, message => { });
+            var settings = new NetworkSettings { PhysicsBackend = PhysicsBackend.Rapier };
+            var factory = new LoopbackFactory();
+            TimeSpan now = TimeSpan.Zero;
+            using (var serverPhysics = new RapierScenes())
+            using (var clientPhysics = new RapierScenes())
+            {
+                NetworkRuntime server = StandaloneRuntime.Create(TestObjects.Registry(), settings, factory, prefabs, new StandaloneBehaviours(), files, () => now, log, serverPhysics);
+                NetworkRuntime client = StandaloneRuntime.Create(TestObjects.Registry(), settings, factory, prefabs, new StandaloneBehaviours(), files, () => now, log, clientPhysics);
+                void Frames(int count)
+                {
+                    for (int frame = 0; frame < count; frame++)
+                    {
+                        now += TimeSpan.FromSeconds(Tick);
+                        server.BeginFrame(now, Tick);
+                        client.BeginFrame(now, Tick);
+                        server.EndFrame();
+                        client.EndFrame();
+                    }
+                }
+
+                server.ServerManager.StartConnection(7777);
+                client.ClientManager.StartConnection("127.0.0.1", 7777);
+                Frames(10);
+                ulong peer = client.ClientManager.Objects.LocalPeerId;
+                NetworkScene red = server.ServerManager.Scenes.Load(ArenaSceneId, new[] { peer }, ScenePhysics.Own);
+                NetworkScene blue = server.ServerManager.Scenes.Load(ArenaSceneId, new[] { peer }, ScenePhysics.Own);
+                Frames(10);
+                var ball = new BallEntity { Scene = red, Position = new Vector3(0f, 5f, 0f) };
+                server.ServerManager.Spawn(ball);
+                Frames(2);
+                JointHandle rope = serverPhysics.CreateJoint(ball, ball.Body, default, JointDesc.Rope(Vector3.Zero, new Vector3(0f, 6f, 0f), 1f));
+                PhysicsBody body = ball.Body;
+                body.Velocity = new Vector3(2f, 0f, 0f);
+                Frames(30);
+                BodyHandle before = ball.Body.Handle;
+                Vector3 position = ball.Body.Position;
+                Vector3 velocity = ball.Body.Velocity;
+                Assert.Greater(position.Y, 4f);
+
+                Assert.IsTrue(server.ServerManager.MoveToScene(ball, blue));
+
+                Assert.IsFalse(serverPhysics.WorldOf(red).Contains(before));
+                Assert.IsFalse(serverPhysics.WorldOf(red).Contains(rope));
+                Assert.IsTrue(serverPhysics.WorldOf(blue).Contains(ball.Body.Handle));
+                Assert.AreEqual(position, ball.Body.Position);
+                Assert.AreEqual(velocity, ball.Body.Velocity);
+                Frames(180);
+
+                var onClient = (StandaloneEntity)client.ClientManager.Spawned[ball.Record.ObjectId];
+                Assert.IsEmpty(logged);
+                Assert.AreEqual(0.5f, ball.Position.Y, 0.05f);
+                Assert.AreEqual(blue, onClient.Scene);
+                Assert.IsTrue(clientPhysics.WorldOf(blue).Contains(onClient.Body.Handle));
+                Assert.IsTrue(onClient.Body.IsKinematic);
+            }
+        }
+
+        [Test]
         public void AConsoleBallIsNotReadWhileItSleepsAndIsReadAgainOnceItIsPushed()
         {
             var files = new SceneFiles();

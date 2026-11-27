@@ -328,6 +328,56 @@ namespace Fomoxa.Unity.Rapier.Tests
         }
 
         [Test]
+        public void AnObjectMovedToAnotherInstanceIsRebuiltInItsWorldWithItsMotionAndItsPrefabJointsButNotItsCodeJoints()
+        {
+            NetworkObject chainPrefab = Prefab("Chain", ChainPrefabId, chain =>
+            {
+                chain.AddComponent<SphereCollider>().radius = 0.5f;
+                Rigidbody root = chain.AddComponent<Rigidbody>();
+                var link = Limb(chain.transform, "Link", new Vector3(1f, 0f, 0f)).AddComponent<HingeJoint>();
+                link.connectedBody = root;
+                link.anchor = new Vector3(-0.5f, 0f, 0f);
+                link.axis = Vector3.forward;
+            });
+            NetworkManager server = Manager(chainPrefab);
+            var physics = server.GetComponent<RapierPhysics>();
+            var loader = new RoomLoader();
+            server.Scenes.Register(RoomSceneId, loader);
+            physics.SceneIdOf = scene => loader.Rooms.Contains(scene) ? RoomSceneId : 0;
+            physics.SceneFileOf = sceneId => sceneId == RoomSceneId ? loader.File : null;
+            server.ServerManager.StartConnection(1);
+            NetworkScene red = server.ServerManager.Scenes.Load(RoomSceneId, Array.Empty<ulong>(), ScenePhysics.Own);
+            NetworkScene blue = server.ServerManager.Scenes.Load(RoomSceneId, Array.Empty<ulong>(), ScenePhysics.Own);
+            RunFrames(1);
+            NetworkObject chained = SpawnIn(server, chainPrefab, loader.Rooms[0], new Vector3(0f, 4f, 0f));
+            RunFrames(1);
+            JointHandle rope = physics.Scenes.CreateJoint(chained, chained.Body, default, JointDesc.Rope(System.Numerics.Vector3.Zero, new System.Numerics.Vector3(0f, 5f, 0f), 1f));
+            NetworkBody body = chained.Body;
+            body.Velocity = new Vector3(1f, 0f, 0f);
+            RunFrames(10);
+            BodyHandle before = chained.Body.Handle;
+            Vector3 position = chained.Body.Position;
+            Vector3 velocity = chained.Body.Velocity;
+            Assert.Greater(position.y, 3.9f);
+
+            Assert.IsTrue(server.ServerManager.MoveToScene(chained, blue));
+
+            Assert.AreEqual(loader.Rooms[1], chained.gameObject.scene);
+            Assert.IsFalse(physics.Scenes.WorldOf(red).Contains(before));
+            Assert.IsFalse(physics.Scenes.WorldOf(red).Contains(rope));
+            Assert.IsTrue(physics.Scenes.WorldOf(blue).Contains(chained.Body.Handle));
+            Assert.IsTrue(physics.Scenes.WorldOf(blue).Contains(chained.Bodies[1].Handle));
+            Assert.Less(Vector3.Distance(position, chained.Body.Position), 1e-5f);
+            Assert.Less(Vector3.Distance(velocity, chained.Body.Velocity), 1e-5f);
+
+            RunFrames(180);
+
+            Transform link = chained.transform.Find("Link");
+            Assert.Less(chained.transform.position.y, 3f);
+            Assert.Less(Vector3.Distance(link.TransformPoint(new Vector3(-0.5f, 0f, 0f)), chained.transform.TransformPoint(new Vector3(0.5f, 0f, 0f))), 0.02f);
+        }
+
+        [Test]
         public void AnOpenSceneStaysInTheDefaultWorldWhileAnInstanceOfItsSceneLoads()
         {
             NetworkObject ballPrefab = Prefab("Ball", BallPrefabId, ball => ball.AddComponent<SphereCollider>().radius = 0.5f);

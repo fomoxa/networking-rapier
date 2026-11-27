@@ -25,6 +25,7 @@ namespace Fomoxa.Unity.Rapier
         private readonly HashSet<NetworkScene> clientLoading = new HashSet<NetworkScene>();
         private readonly Dictionary<Scene, Additions> additions = new Dictionary<Scene, Additions>();
         private readonly List<NetworkObject> leaving = new List<NetworkObject>();
+        private readonly List<MovedPart> movedParts = new List<MovedPart>();
         private readonly HashSet<NetworkObject> spawned = new HashSet<NetworkObject>();
         private readonly List<NetworkObject> binding = new List<NetworkObject>();
         private readonly List<IPhysicsSimulation> inner = new List<IPhysicsSimulation>();
@@ -220,6 +221,63 @@ namespace Fomoxa.Unity.Rapier
             {
                 scenes.EndProxy(networkObject);
             }
+        }
+
+        public override void MoveBodies(NetworkObject networkObject)
+        {
+            if (scenes == null || networkObject == null || !bound.TryGetValue(networkObject, out Bound found))
+            {
+                return;
+            }
+
+            movedParts.Clear();
+            foreach (BoundPart part in found.Parts)
+            {
+                if (part.Body.IsValid)
+                {
+                    movedParts.Add(new MovedPart(part.Transform, part.Body.State, found.World.GetKind(part.Body.Handle)));
+                }
+
+                if (part.Body2D.IsValid)
+                {
+                    movedParts.Add(new MovedPart(part.Transform, part.Body2D.State, found.World2D.GetKind(part.Body2D.Handle)));
+                }
+            }
+
+            Unbind(networkObject);
+            Bound moved = Bind(networkObject);
+            if (moved != null)
+            {
+                foreach (MovedPart state in movedParts)
+                {
+                    BoundPart part = moved.Parts.Find(candidate => candidate.Transform == state.Transform && (state.Is2D ? candidate.Body2D.IsValid : candidate.Body.IsValid));
+                    if (part == null)
+                    {
+                        continue;
+                    }
+
+                    if (state.Is2D)
+                    {
+                        if (moved.World2D.GetKind(part.Body2D.Handle) != state.Kind)
+                        {
+                            moved.World2D.SetKind(part.Body2D.Handle, state.Kind);
+                        }
+
+                        part.Body2D.State = state.State2D;
+                    }
+                    else
+                    {
+                        if (moved.World.GetKind(part.Body.Handle) != state.Kind)
+                        {
+                            moved.World.SetKind(part.Body.Handle, state.Kind);
+                        }
+
+                        part.Body.State = state.State;
+                    }
+                }
+            }
+
+            movedParts.Clear();
         }
 
         public override void ForgetDestroyedProxies()
@@ -1058,6 +1116,37 @@ namespace Fomoxa.Unity.Rapier
             }
 
             return manager.Scenes.TryGetSceneFile(sceneId, out byte[] bytes) ? bytes : null;
+        }
+
+        private readonly struct MovedPart
+        {
+            public MovedPart(Transform transform, in BodyState state, BodyKind kind)
+            {
+                Transform = transform;
+                State = state;
+                State2D = default;
+                Kind = kind;
+                Is2D = false;
+            }
+
+            public MovedPart(Transform transform, in BodyState2D state, BodyKind kind)
+            {
+                Transform = transform;
+                State = default;
+                State2D = state;
+                Kind = kind;
+                Is2D = true;
+            }
+
+            public Transform Transform { get; }
+
+            public BodyState State { get; }
+
+            public BodyState2D State2D { get; }
+
+            public BodyKind Kind { get; }
+
+            public bool Is2D { get; }
         }
 
         private readonly struct Placement
