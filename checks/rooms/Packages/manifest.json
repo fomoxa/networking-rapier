@@ -1,7 +1,6 @@
 {
   "dependencies": {
     "com.fomoxa.networking": "file:../../../../unity/com.fomoxa.networking",
-    "com.fomoxa.networking.rapier": "file:../../../com.fomoxa.networking.rapier",
-    "com.unity.modules.imgui": "1.0.0"
+    "com.fomoxa.networking.rapier": "file:../../../com.fomoxa.networking.rapier"
   }
 }
